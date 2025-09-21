@@ -1,0 +1,17 @@
+[workspace]
+members = [
+    "kernel",
+    # "boot",      # we'll add when we make a bootloader crate
+    # "drivers",   # add later
+    # "lib",       # add later
+    # "user",      # userland apps
+    # "fs"         # filesystem implementations
+]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+
+resolver = "3"
