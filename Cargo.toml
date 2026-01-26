@@ -8,10 +8,13 @@ members = [
     # "fs"         # filesystem implementations
 ]
 
+resolver = "2"
+
 [profile.dev]
 panic = "abort"
 
 [profile.release]
 panic = "abort"
 
-resolver = "3"
+lto = true
+opt-level = 3

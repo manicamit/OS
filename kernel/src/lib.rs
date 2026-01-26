@@ -1,19 +1,40 @@
-#![no_std]  // no standard library
-#![no_main] // no normal main entry point
+#![no_std]
+#![no_main]
+
+mod vga;
 
 use core::panic::PanicInfo;
+use vga::{Color, Writer};
 
-/// This function is called on panic.
-/// For now, just loop forever.
+
+/// Panic handler
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
-    loop {}
+    loop {
+        unsafe {
+            core::arch::asm!("hlt");
+        }
+    }
 }
 
-/// Our entry point (`_start`) called by the bootloader.
-/// We’ll link this symbol later.
+
+/// Kernel entry point (called from stage2)
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() -> ! {
-    // For now, do nothing and loop forever.
-    loop {}
+    // Create a VGA writer: white text on black background
+    let mut writer = Writer::new(Color::White, Color::Black);
+
+    // Clear the screen
+    writer.clear_screen();
+
+    // Write some text
+    writer.write_str("Hello from Rust kernel!\n");
+    writer.write_str("Long mode + paging + VGA works.\n");
+
+    // Halt forever
+    loop {
+        unsafe {
+            core::arch::asm!("hlt");
+        }
+    }
 }

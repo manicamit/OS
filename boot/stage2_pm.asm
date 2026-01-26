@@ -78,7 +78,7 @@ pm_entry:
     lodsb                 ; AL = [ESI], ESI++
     test al, al
     jz .done_pm
-    mov ah, 0x07
+    mov ah, 0x02
     stosw                 ; stores AX to [EDI], EDI += 2
     jmp .print_pm
 

@@ -1,25 +1,28 @@
 OUTPUT_FORMAT(elf64-x86-64)
 ENTRY(_start)
-
 SECTIONS {
-    /* Load kernel at 1 MB */
     . = 1M;
-
-    .text : {
-        *(.text._start)  /* put our _start first */
-        *(.text*)        /* rest of code */
+    
+    .text ALIGN(4K) : {
+        KEEP(*(.text._start))
+        *(.text*)
     }
-
-    .rodata : {
-        *(.rodata*)      /* read-only data */
+    
+    .rodata ALIGN(4K) : {
+        *(.rodata*)
     }
-
-    .data : {
-        *(.data*)        /* initialized data */
+    
+    .data ALIGN(4K) : {
+        *(.data*)
     }
-
-    .bss : {
-        *(.bss*)         /* zero-initialized data */
+    
+    .bss ALIGN(4K) : {
+        *(.bss*)
         *(COMMON)
+    }
+    
+    /DISCARD/ : {
+        *(.eh_frame)
+        *(.note*)
     }
 }
