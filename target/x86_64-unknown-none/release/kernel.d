@@ -1,1 +1,1 @@
-/home/manicguy/Projects/OS/target/x86_64-unknown-none/release/kernel: /home/manicguy/Projects/OS/kernel/src/idt.rs /home/manicguy/Projects/OS/kernel/src/main.rs /home/manicguy/Projects/OS/kernel/src/vga.rs
+/home/manicguy/Projects/OS/target/x86_64-unknown-none/release/kernel: /home/manicguy/Projects/OS/kernel/src/idt.rs /home/manicguy/Projects/OS/kernel/src/main.rs /home/manicguy/Projects/OS/kernel/src/pmm.rs /home/manicguy/Projects/OS/kernel/src/vga.rs

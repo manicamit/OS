@@ -3,10 +3,12 @@
 
 mod idt;
 mod vga;
+mod pmm;
 
 use core::panic::PanicInfo;
+use pmm::PhysicalMemoryManager;
 
-/// Panic handler — halt forever
+/// Panic handler
 #[panic_handler]
 fn panic(_: &PanicInfo) -> ! {
     vga::println("KERNEL PANIC!");
@@ -15,9 +17,9 @@ fn panic(_: &PanicInfo) -> ! {
     }
 }
 
-/// BIOS E820 memory map entry
+/// BIOS E820 memory map entry (matches stage2 layout)
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub struct E820Entry {
     pub base: u64,
     pub length: u64,
@@ -28,9 +30,7 @@ pub struct E820Entry {
 fn delay_seconds(seconds: u32) {
     let iterations = seconds * 5_000_000;
     for _ in 0..iterations {
-        unsafe {
-            core::arch::asm!("pause", options(nomem, nostack));
-        }
+        unsafe { core::arch::asm!("pause"); }
     }
 }
 
@@ -48,59 +48,33 @@ fn e820_type_str(kind: u32) -> &'static str {
 #[no_mangle]
 pub extern "C" fn _start(e820_ptr: *const E820Entry, e820_count: usize) -> ! {
     delay_seconds(2);
-    
+
     vga::init();
     idt::init();
-    
-    vga::println("Hello from kernel!");
+
     vga::println("VGA driver initialized.");
     vga::println("IDT initialized.");
     vga::println("");
-    
-    // Debug: print the pointer and count
+
     vga::print("E820 pointer: ");
     vga::print_hex(e820_ptr as u64);
     vga::println("");
-    
+
     vga::print("E820 count: ");
     vga::print_num(e820_count as u64);
     vga::println("");
     vga::println("");
-    
-    // Read the raw memory at the E820 buffer address
-    vga::println("First 64 bytes at E820 buffer:");
-    let raw_ptr = 0x8000 as *const u64;
-    for i in 0..8 {
-        unsafe {
-            vga::print("  ");
-            vga::print_hex((0x8000 + i * 8) as u64);
-            vga::print(": ");
-            vga::print_hex(*raw_ptr.add(i));
-            vga::println("");
-        }
-    }
-    vga::println("");
-    
-    if e820_count == 0 {
-        vga::println("ERROR: E820 count is 0!");
-        loop {
-            unsafe { core::arch::asm!("cli; hlt"); }
-        }
-    }
-    
-    vga::println("E820 Memory Map:");
-    
-    let count = core::cmp::min(e820_count, 128);
+
     let entries = unsafe {
-        core::slice::from_raw_parts(e820_ptr, count)
+        core::slice::from_raw_parts(e820_ptr, e820_count)
     };
-    
+
+    vga::println("E820 Memory Map:");
     for (i, e) in entries.iter().enumerate() {
-        // Skip entries that are clearly invalid
-        if e.base == 0 && e.length == 0 && e.kind == 0 {
+        if e.base == 0 && e.length == 0 {
             continue;
         }
-        
+
         vga::print("  ");
         vga::print_num(i as u64);
         vga::print(": ");
@@ -111,16 +85,38 @@ pub extern "C" fn _start(e820_ptr: *const E820Entry, e820_count: usize) -> ! {
         vga::print_hex(e.length);
         vga::print(") ");
         vga::println(e820_type_str(e.kind));
-        
-        // Only show first 10 entries for readability
-        if i >= 9 {
-            vga::print("  ... (");
-            vga::print_num((count - 10) as u64);
-            vga::println(" more entries)");
-            break;
+    }
+
+    vga::println("");
+    vga::println("Initializing Physical Memory Manager...");
+
+    let mut pmm = match PhysicalMemoryManager::new(entries) {
+        Some(p) => p,
+        None => {
+            vga::println("ERROR: No usable RAM found!");
+            loop { unsafe { core::arch::asm!("hlt"); } }
+        }
+    };
+
+    vga::println("PMM initialized.");
+    vga::println("");
+    vga::println("Allocating physical frames:");
+
+    for i in 0..5 {
+        match pmm.alloc_frame() {
+            Some(frame) => {
+                vga::print("  Frame ");
+                vga::print_num(i);
+                vga::print(": ");
+                vga::print_hex(frame);
+                vga::println("");
+            }
+            None => {
+                vga::println("  OUT OF MEMORY");
+            }
         }
     }
-    
+
     loop {
         unsafe { core::arch::asm!("cli; hlt"); }
     }
