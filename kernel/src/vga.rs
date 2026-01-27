@@ -158,3 +158,49 @@ pub fn println(s: &str) {
         (*writer).write_byte(b'\n');
     }
 }
+
+
+/// Print a decimal number
+pub fn print_num(n: u64) {
+    if n == 0 {
+        print("0");
+        return;
+    }
+    
+    let mut num = n;
+    let mut divisor = 1u64;
+    
+    while divisor <= num / 10 {
+        divisor *= 10;
+    }
+    
+    while divisor > 0 {
+        let digit = (num / divisor) as u8;
+        unsafe {
+            let writer = core::ptr::addr_of_mut!(WRITER);
+            (*writer).write_byte(b'0' + digit);
+        }
+        num %= divisor;
+        divisor /= 10;
+    }
+}
+
+/// Print a hexadecimal number with 0x prefix
+pub fn print_hex(n: u64) {
+    print("0x");
+    
+    for i in (0..16).rev() {
+        let nibble = ((n >> (i * 4)) & 0xF) as u8;
+        let ch = if nibble < 10 {
+            b'0' + nibble
+        } else {
+            b'A' + (nibble - 10)
+        };
+        
+        unsafe {
+            let writer = core::ptr::addr_of_mut!(WRITER);
+            (*writer).write_byte(ch);
+        }
+    }
+}
+
