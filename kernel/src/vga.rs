@@ -204,3 +204,14 @@ pub fn print_hex(n: u64) {
     }
 }
 
+/// Print a byte array as ASCII (filtering non-printable characters)
+pub fn print_ascii(bytes: &[u8]) {
+    for &byte in bytes {
+        if byte >= 0x20 && byte <= 0x7E {
+            unsafe {
+                let writer = core::ptr::addr_of_mut!(WRITER);
+                (*writer).write_byte(byte);
+            }
+        }
+    }
+}

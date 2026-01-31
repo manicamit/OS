@@ -1,5 +1,5 @@
 ; =====================================================
-; Stage 2 Loader - WITH DEBUG
+; Stage 2 Loader - Chunked Disk Read
 ; =====================================================
 
 CODE_SEL    equ 0x08
@@ -7,7 +7,7 @@ DATA_SEL    equ 0x10
 CODE64_SEL  equ 0x18
 
 KERNEL_LBA     equ 2048
-KERNEL_SECTORS equ 128
+KERNEL_SECTORS equ 160
 KERNEL_LOAD    equ 0x00100000
 
 E820_BUFFER    equ 0x00008000
@@ -25,7 +25,7 @@ start2:
     mov ss, ax
     mov sp, 0x7C00
 
-    ; Print '2' to show stage2 started
+    ; Print '2'
     mov ah, 0x0E
     mov al, '2'
     int 0x10
@@ -47,21 +47,18 @@ start2:
     mov ecx, E820_ENTRY_SZ
     mov edx, 0x534D4150
     int 0x15
-    jc .e820_failed
+    jc .e820_done
 
     cmp eax, 0x534D4150
-    jne .e820_failed
+    jne .e820_done
 
-    ; Check length
     mov eax, dword [di + 8]
     or  eax, dword [di + 12]
     jz  .skip_entry
 
-    ; Valid entry
     inc word [e820_count]
     add di, E820_ENTRY_SZ
 
-    ; Print 'E' for each entry found
     mov ah, 0x0E
     mov al, 'E'
     int 0x10
@@ -75,49 +72,79 @@ start2:
     
     jmp .e820_loop
 
-.e820_failed:
-    ; Print 'F' for E820 failed
-    mov ah, 0x0E
-    mov al, 'F'
-    int 0x10
-    jmp .e820_done
-
 .e820_done:
-    ; Print the count (single digit)
     mov ah, 0x0E
     mov al, byte [e820_count]
     add al, '0'
     int 0x10
 
 ; ---------------------------------------
-; Load kernel
+; Load kernel in chunks (64 sectors max per read)
 ; ---------------------------------------
-    mov word  [dap], 0x10
-    mov word  [dap+2], KERNEL_SECTORS
-    mov word  [dap+4], 0x0000
-    mov word  [dap+6], 0x1000
-    mov dword [dap+8], KERNEL_LBA
+    mov ah, 0x0E
+    mov al, 'L'
+    int 0x10
+
+    mov word [sectors_left], KERNEL_SECTORS
+    mov word [load_segment], 0x1000
+    mov dword [load_lba], KERNEL_LBA
+
+.load_chunk:
+    ; Check if done
+    cmp word [sectors_left], 0
+    je .load_done
+
+    ; Determine chunk size (max 64 sectors)
+    mov ax, [sectors_left]
+    cmp ax, 64
+    jle .chunk_size_ok
+    mov ax, 64
+.chunk_size_ok:
+    mov [chunk_size], ax
+
+    ; Setup DAP
+    mov byte  [dap+0], 0x10
+    mov byte  [dap+1], 0
+    mov word  [dap+2], ax           ; sectors to read
+    mov word  [dap+4], 0x0000       ; offset
+    mov ax, [load_segment]
+    mov word  [dap+6], ax           ; segment
+    mov eax, [load_lba]
+    mov dword [dap+8], eax          ; LBA
     mov dword [dap+12], 0
 
+    ; Read
     mov si, dap
     mov ah, 0x42
     mov dl, 0x80
     int 0x13
-    jc disk_error
+    jc .disk_error
 
-    ; Print 'K' for kernel loaded
+    ; Print '.'
+    mov ah, 0x0E
+    mov al, '.'
+    int 0x10
+
+    ; Update for next chunk
+    mov ax, [chunk_size]
+    sub word [sectors_left], ax
+    add word [load_lba], ax
+    
+    ; Update segment (sectors * 32 = bytes / 16)
+    mov ax, [chunk_size]
+    shl ax, 5                       ; multiply by 32
+    add word [load_segment], ax
+
+    jmp .load_chunk
+
+.load_done:
     mov ah, 0x0E
     mov al, 'K'
     int 0x10
 
-    lgdt [gdt_descriptor]
+    jmp .after_load
 
-    mov eax, cr0
-    or eax, 1
-    mov cr0, eax
-    jmp CODE_SEL:protected_mode_entry
-
-disk_error:
+.disk_error:
     mov ah, 0x0E
     mov al, 'X'
     int 0x10
@@ -126,7 +153,19 @@ disk_error:
     hlt
     jmp .hang
 
+.after_load:
+    lgdt [gdt_descriptor]
+
+    mov eax, cr0
+    or eax, 1
+    mov cr0, eax
+    jmp CODE_SEL:protected_mode_entry
+
 dap: times 16 db 0
+sectors_left: dw 0
+load_segment: dw 0
+load_lba: dd 0
+chunk_size: dw 0
 e820_count: dw 0
 
 align 8
@@ -152,7 +191,7 @@ protected_mode_entry:
     ; Write 'P' to VGA
     mov dword [0xB8000], 0x0F500F50
 
-    ; Copy kernel
+    ; Copy kernel from 0x10000 to 0x100000
     mov esi, 0x00010000
     mov edi, KERNEL_LOAD
     mov ecx, KERNEL_SECTORS * 512
@@ -162,7 +201,7 @@ protected_mode_entry:
     ; Write 'C' to VGA
     mov dword [0xB8002], 0x0F430F43
 
-    ; Clear paging
+    ; Clear paging structures
     mov edi, 0x2000
     mov ecx, (4096 * 6) / 4
     xor eax, eax
