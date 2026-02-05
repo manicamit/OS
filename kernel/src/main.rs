@@ -238,12 +238,25 @@ pub extern "C" fn _start(e820_ptr: *const E820Entry, e820_count: usize) -> ! {
   // Read CR3
  // inside _start()
   
-  vga::println("=== VMM LOWER-HALF TEST ===");
+vga::println("=== VMM LOWER-HALF TEST ===");
   
   // Read CR3
   let cr3: u64;
   unsafe { core::arch::asm!("mov {}, cr3", out(reg) cr3); }
   let pml4_phys = cr3 & 0x000F_FFFF_FFFF_F000;
+  
+  // Install recursive mapping at PML4[510]
+  unsafe {
+      let pml4 = pml4_phys as *mut u64;
+      pml4.add(510).write(pml4_phys | 0x3);
+  }
+  
+  // Reload CR3 to activate recursion
+  unsafe {
+      core::arch::asm!("mov cr3, {}", in(reg) pml4_phys);
+  }
+  
+  vga::println("Recursive slot installed (not yet dereferenced)");
   
   // Allocate data frame FIRST
   let phys = pmm.alloc_frame().expect("No free frames");
@@ -252,12 +265,12 @@ pub extern "C" fn _start(e820_ptr: *const E820Entry, e820_count: usize) -> ! {
   vga::print_hex(phys);
   vga::println("");
   
-  // Create VMM AFTER allocations
+  // Create VMM AFTER allocation
   let mut vmm = unsafe {
       PageTableManager::new(pml4_phys, &mut pmm)
   };
   
-  // Test virtual address (lower half)
+  // Test lower-half mapping
   let virt = 0x0000_0000_0040_0000;
   
   vga::print("Mapping ");
@@ -266,7 +279,6 @@ pub extern "C" fn _start(e820_ptr: *const E820Entry, e820_count: usize) -> ! {
   vga::print_hex(phys);
   vga::println("");
   
-  // Map and test
   unsafe {
       vmm.map_page(virt, phys, 0x2);
       *(virt as *mut u64) = 0xCAFEBABEDEADBEEF;
@@ -289,7 +301,6 @@ pub extern "C" fn _start(e820_ptr: *const E820Entry, e820_count: usize) -> ! {
   
   loop {
       unsafe { core::arch::asm!("cli; hlt"); }
-  }
-                    
+  }          
             
 }
