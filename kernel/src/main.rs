@@ -4,9 +4,11 @@
 mod idt;
 mod vga;
 mod pmm;
+mod vmm;
 
 use core::panic::PanicInfo;
 use pmm::PhysicalMemoryManager;
+use crate::vmm::PageTableManager;
 
 #[panic_handler]
 fn panic(_: &PanicInfo) -> ! {
@@ -223,11 +225,71 @@ pub extern "C" fn _start(e820_ptr: *const E820Entry, e820_count: usize) -> ! {
             }
         }
     }
-    
-    vga::println("");
-    vga::println("Kernel initialized successfully.");
-    
-    loop {
-        unsafe { core::arch::asm!("cli; hlt"); }
-    }
+
+   delay_seconds(2);
+                
+// ============================
+  // VMM SETUP (CORRECT)
+  // ============================
+  
+  vga::println("");
+  vga::println("=== VMM TEST ===");
+  
+  // Read CR3
+ // inside _start()
+  
+  vga::println("=== VMM LOWER-HALF TEST ===");
+  
+  // Read CR3
+  let cr3: u64;
+  unsafe { core::arch::asm!("mov {}, cr3", out(reg) cr3); }
+  let pml4_phys = cr3 & 0x000F_FFFF_FFFF_F000;
+  
+  // Allocate data frame FIRST
+  let phys = pmm.alloc_frame().expect("No free frames");
+  
+  vga::print("Allocated frame: ");
+  vga::print_hex(phys);
+  vga::println("");
+  
+  // Create VMM AFTER allocations
+  let mut vmm = unsafe {
+      PageTableManager::new(pml4_phys, &mut pmm)
+  };
+  
+  // Test virtual address (lower half)
+  let virt = 0x0000_0000_0040_0000;
+  
+  vga::print("Mapping ");
+  vga::print_hex(virt);
+  vga::print(" -> ");
+  vga::print_hex(phys);
+  vga::println("");
+  
+  // Map and test
+  unsafe {
+      vmm.map_page(virt, phys, 0x2);
+      *(virt as *mut u64) = 0xCAFEBABEDEADBEEF;
+  }
+  
+  let val = unsafe { *(virt as *const u64) };
+  
+  vga::print("Read value: ");
+  vga::print_hex(val);
+  
+  if val == 0xCAFEBABEDEADBEEF {
+      vga::println("  SUCCESS");
+  } else {
+      vga::println("  FAILED");
+  }
+  
+  vga::println("VMM lower-half test PASSED");
+  
+  vga::println("Kernel initialized successfully.");
+  
+  loop {
+      unsafe { core::arch::asm!("cli; hlt"); }
+  }
+                    
+            
 }

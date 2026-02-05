@@ -1,45 +1,53 @@
+// kernel/src/vmm.rs
+
 use crate::pmm::PhysicalMemoryManager;
 
-const PRESENT: u64 = 1;
-const WRITABLE: u64 = 1 << 1;
+const PAGE_SIZE: usize = 4096;
+
+#[repr(C)]
+struct PageTable {
+    entries: [u64; 512],
+}
 
 pub struct PageTableManager<'a> {
-    pml4: *mut u64,
+    pml4_phys: u64,
     pmm: &'a mut PhysicalMemoryManager,
 }
 
 impl<'a> PageTableManager<'a> {
-    pub unsafe fn new(cr3: u64, pmm: &'a mut PhysicalMemoryManager) -> Self {
-        Self {
-            pml4: cr3 as *mut u64,
-            pmm,
-        }
+    pub unsafe fn new(pml4_phys: u64, pmm: &'a mut PhysicalMemoryManager) -> Self {
+        Self { pml4_phys, pmm }
     }
 
-    pub fn map_page(&mut self, virt: u64, phys: u64) {
+    pub unsafe fn map_page(&mut self, virt: u64, phys: u64, flags: u64) {
         let pml4_i = (virt >> 39) & 0x1FF;
         let pdpt_i = (virt >> 30) & 0x1FF;
         let pd_i   = (virt >> 21) & 0x1FF;
         let pt_i   = (virt >> 12) & 0x1FF;
 
-        let pdpt = self.get_or_alloc(self.pml4, pml4_i);
+        let pdpt = self.get_or_alloc(self.pml4_phys, pml4_i);
         let pd   = self.get_or_alloc(pdpt, pdpt_i);
         let pt   = self.get_or_alloc(pd, pd_i);
 
-        unsafe {
-            *pt.add(pt_i as usize) = phys | PRESENT | WRITABLE;
-        }
+        let pt_ptr = pt as *mut PageTable;
+        (*pt_ptr).entries[pt_i as usize] = phys | flags | 0x1;
+
+        core::arch::asm!("invlpg [{}]", in(reg) virt, options(nostack));
     }
 
-    fn get_or_alloc(&mut self, table: *mut u64, index: u64) -> *mut u64 {
-        unsafe {
-            let entry = table.add(index as usize);
-            if *entry & PRESENT == 0 {
-                let frame = self.pmm.alloc_frame().expect("Out of physical memory");
-                core::ptr::write_bytes(frame as *mut u8, 0, 4096);
-                *entry = frame | PRESENT | WRITABLE;
-            }
-            (*entry & 0x000F_FFFF_FFFF_F000) as *mut u64
+    unsafe fn get_or_alloc(&mut self, parent_phys: u64, index: u64) -> u64 {
+        let parent = parent_phys as *mut PageTable;
+        let entry = &mut (*parent).entries[index as usize];
+
+        if (*entry & 1) == 0 {
+            let new_table = self.pmm.alloc_frame()
+                .expect("Out of memory for page tables");
+
+            core::ptr::write_bytes(new_table as *mut u8, 0, PAGE_SIZE);
+            *entry = new_table | 0x3;
+            new_table
+        } else {
+            *entry & 0x000F_FFFF_FFFF_F000
         }
     }
 }

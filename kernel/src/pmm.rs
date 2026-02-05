@@ -11,12 +11,10 @@ pub struct PhysicalMemoryManager {
 }
 
 impl PhysicalMemoryManager {
-    /// Initialize PMM from BIOS E820 map
     pub fn new(e820: &[E820Entry]) -> Option<Self> {
         let mut best_base = 0;
         let mut best_len = 0;
 
-        // Pick the largest usable region above 1 MiB
         for e in e820 {
             if e.kind == 1 && e.base >= 0x0010_0000 {
                 if e.length > best_len {
@@ -39,7 +37,6 @@ impl PhysicalMemoryManager {
         })
     }
 
-    /// Allocate one 4 KiB physical frame
     pub fn alloc_frame(&mut self) -> Option<u64> {
         if self.current + PAGE_SIZE > self.end {
             return None;

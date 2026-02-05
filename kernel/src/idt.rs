@@ -126,6 +126,41 @@ extern "C" fn divide_by_zero_handler() {
     }
 }
 
+// General Protection Fault (#GP) - has error code
+#[unsafe(naked)]
+extern "C" fn general_protection_fault_handler() {
+    unsafe {
+        naked_asm!(
+            "cli",
+            "push rax",
+            "push rbx",
+            "mov rax, 0xB8000",
+            
+            // Clear screen
+            "mov rbx, 0",
+            "1:",
+            "mov word ptr [rax + rbx*2], 0x0F20",
+            "inc rbx",
+            "cmp rbx, 2000",
+            "jl 1b",
+            
+            // Write "GP FAULT"
+            "mov word ptr [rax + 0], 0x4F47",   // Red 'G'
+            "mov word ptr [rax + 2], 0x4F50",   // Red 'P'
+            "mov word ptr [rax + 4], 0x4F20",   // Red ' '
+            "mov word ptr [rax + 6], 0x4F46",   // Red 'F'
+            "mov word ptr [rax + 8], 0x4F41",   // Red 'A'
+            "mov word ptr [rax + 10], 0x4F55",  // Red 'U'
+            "mov word ptr [rax + 12], 0x4F4C",  // Red 'L'
+            "mov word ptr [rax + 14], 0x4F54",  // Red 'T'
+            
+            "2:",
+            "hlt",
+            "jmp 2b",
+        )
+    }
+}
+
 // Page Fault (#PF) - has error code
 #[unsafe(naked)]
 extern "C" fn page_fault_handler() {
@@ -224,6 +259,45 @@ extern "C" fn page_fault_handler() {
     }
 }
 
+// Double Fault (#DF) - has error code (always 0)
+#[unsafe(naked)]
+extern "C" fn double_fault_handler() {
+    unsafe {
+        naked_asm!(
+            "cli",
+            "push rax",
+            "push rbx",
+            "mov rax, 0xB8000",
+            
+            // Clear screen
+            "mov rbx, 0",
+            "1:",
+            "mov word ptr [rax + rbx*2], 0x0F20",
+            "inc rbx",
+            "cmp rbx, 2000",
+            "jl 1b",
+            
+            // Write "DOUBLE FAULT"
+            "mov word ptr [rax + 0], 0x4F44",   // Red 'D'
+            "mov word ptr [rax + 2], 0x4F4F",   // Red 'O'
+            "mov word ptr [rax + 4], 0x4F55",   // Red 'U'
+            "mov word ptr [rax + 6], 0x4F42",   // Red 'B'
+            "mov word ptr [rax + 8], 0x4F4C",   // Red 'L'
+            "mov word ptr [rax + 10], 0x4F45",  // Red 'E'
+            "mov word ptr [rax + 12], 0x4F20",  // Red ' '
+            "mov word ptr [rax + 14], 0x4F46",  // Red 'F'
+            "mov word ptr [rax + 16], 0x4F41",  // Red 'A'
+            "mov word ptr [rax + 18], 0x4F55",  // Red 'U'
+            "mov word ptr [rax + 20], 0x4F4C",  // Red 'L'
+            "mov word ptr [rax + 22], 0x4F54",  // Red 'T'
+            
+            "2:",
+            "hlt",
+            "jmp 2b",
+        )
+    }
+}
+
 // Generic Exception Handler
 #[unsafe(naked)]
 extern "C" fn generic_exception_handler() {
@@ -276,8 +350,10 @@ pub fn init() {
         }
         
         // Override with specific handlers
-        (*idt_ptr).set_handler(0, divide_by_zero_handler as u64);   // #DE
-        (*idt_ptr).set_handler(14, page_fault_handler as u64);      // #PF
+        (*idt_ptr).set_handler(0, divide_by_zero_handler as u64);              // #DE
+        (*idt_ptr).set_handler(8, double_fault_handler as u64);                // #DF
+        (*idt_ptr).set_handler(13, general_protection_fault_handler as u64);   // #GP
+        (*idt_ptr).set_handler(14, page_fault_handler as u64);                 // #PF
         
         (*idt_ptr).load();
     }
