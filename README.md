@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 # 🖥️ MyOS – Operating System (Rust + C, x86_64)
+=======
+# 🖥️ MyOS –  Operating System (Rust + C, x86_64)
+>>>>>>> 44c70bb (kernel mapping working for now)
 
 ## 📂 Project Structure
 
