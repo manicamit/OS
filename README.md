@@ -1,4 +1,4 @@
-# 🖥️ MyOS – Hobby Operating System (Rust + C, x86_64)
+# 🖥️ MyOS – Operating System (Rust + C, x86_64)
 
 ## 📂 Project Structure
 
