@@ -104,4 +104,21 @@ impl<'a> PageTableManager<'a> {
             options(nostack, preserves_flags)
         );
     }
+
+    /// Map a contiguous range of physical memory to virtual memory
+    /// All addresses and size must be 4K-aligned
+    pub unsafe fn map_range(&mut self, virt_start: u64, phys_start: u64, size: u64, flags: u64) {
+        // Align to page boundaries
+        let virt_aligned = virt_start & !0xFFF;
+        let phys_aligned = phys_start & !0xFFF;
+        let size_aligned = ((size + 0xFFF) & !0xFFF);
+        
+        let num_pages = size_aligned / PAGE_SIZE as u64;
+        
+        for i in 0..num_pages {
+            let virt = virt_aligned + (i * PAGE_SIZE as u64);
+            let phys = phys_aligned + (i * PAGE_SIZE as u64);
+            self.map_page(virt, phys, flags);
+        }
+    }
 }
