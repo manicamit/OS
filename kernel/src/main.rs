@@ -248,6 +248,87 @@ fn map_kernel(vmm: &mut PageTableManager) {
         }
 }
 
+/// Map VGA physical address to higher-half
+/// This directly manipulates page tables since we can't use VMM (it borrows pmm)
+unsafe fn map_vga_to_higher_half() {
+    let virt = vga::VGA_HIGHER_HALF;
+    let phys = vga::VGA_PHYS;
+    
+    let pml4_i = ((virt >> 39) & 0x1FF) as usize;
+    let pdpt_i = ((virt >> 30) & 0x1FF) as usize;
+    let pd_i   = ((virt >> 21) & 0x1FF) as usize;
+    let pt_i   = ((virt >> 12) & 0x1FF) as usize;
+    
+    let pml4 = 0x2000 as *mut u64;
+    
+    // Get or create PDPT
+    let pdpt_entry_ptr = pml4.add(pml4_i);
+    let pdpt_entry = core::ptr::read_volatile(pdpt_entry_ptr);
+    
+    let pdpt_phys = if (pdpt_entry & 1) == 0 {
+        // Need to allocate - use a fixed address in low memory for simplicity
+        // This is safe since we're in early boot and have identity mapping
+        let frame = 0x8000u64; // Use E820 buffer area (we're done with it)
+        let table_ptr = frame as *mut u64;
+        for i in 0..512 {
+            core::ptr::write_volatile(table_ptr.add(i), 0);
+        }
+        core::ptr::write_volatile(pdpt_entry_ptr, frame | 0x3);
+        frame
+    } else {
+        pdpt_entry & 0x000F_FFFF_FFFF_F000
+    };
+    
+    let pdpt = pdpt_phys as *mut u64;
+    
+    // Get or create PD
+    let pd_entry_ptr = pdpt.add(pdpt_i);
+    let pd_entry = core::ptr::read_volatile(pd_entry_ptr);
+    
+    let pd_phys = if (pd_entry & 1) == 0 {
+        let frame = 0x9000u64;
+        let table_ptr = frame as *mut u64;
+        for i in 0..512 {
+            core::ptr::write_volatile(table_ptr.add(i), 0);
+        }
+        core::ptr::write_volatile(pd_entry_ptr, frame | 0x3);
+        frame
+    } else {
+        pd_entry & 0x000F_FFFF_FFFF_F000
+    };
+    
+    let pd = pd_phys as *mut u64;
+    
+    // Get or create PT
+    let pt_entry_ptr = pd.add(pd_i);
+    let pt_entry = core::ptr::read_volatile(pt_entry_ptr);
+    
+    let pt_phys = if (pt_entry & 1) == 0 {
+        let frame = 0xA000u64;
+        let table_ptr = frame as *mut u64;
+        for i in 0..512 {
+            core::ptr::write_volatile(table_ptr.add(i), 0);
+        }
+        core::ptr::write_volatile(pt_entry_ptr, frame | 0x3);
+        frame
+    } else {
+        pt_entry & 0x000F_FFFF_FFFF_F000
+    };
+    
+    let pt = pt_phys as *mut u64;
+    
+    // Set final PT entry
+    let final_entry_ptr = pt.add(pt_i);
+    core::ptr::write_volatile(final_entry_ptr, phys | 0x3);
+    
+    // Flush TLB
+    core::arch::asm!(
+        "invlpg [{}]",
+        in(reg) virt,
+        options(nostack, preserves_flags)
+    );
+}
+
 #[no_mangle]
 pub extern "C" fn _start(e820_ptr: *const E820Entry, e820_count: usize) -> ! {
     // Delay 2 seconds before starting
@@ -468,6 +549,17 @@ extern "C" fn phase3_with_new_stack() -> ! {
             unsafe { core::arch::asm!("pause", options(nomem, nostack)); }
         }
     
+    // Map VGA to higher-half BEFORE removing identity mapping
+    // We need to directly map since we can't use vmm here (it borrows pmm)
+    unsafe {
+        map_vga_to_higher_half();
+    }
+    
+    // Switch VGA module to use higher-half address
+    vga::switch_to_higher_half();
+    
+    vga::println("VGA mapped to higher-half");
+    
     let pml4_phys = 0x2000u64;
     let pml4 = pml4_phys as *mut u64;
     
@@ -486,20 +578,20 @@ extern "C" fn phase3_with_new_stack() -> ! {
         );
     }
     
-    // vga::println("Identity mapping removed!");
-    // 
-    // vga::println("");
-    // vga::println("========================================");
-    // vga::println("=== PHASE 3 COMPLETE! ===");
-    // vga::println("========================================");
-    // vga::println("");
-    // vga::println("Kernel Status:");
-    // vga::println("  RIP: Higher-half âœ“");
-    // vga::println("  RSP: Higher-half âœ“");
-    // vga::println("  Identity mapping: REMOVED âœ“");
-    // vga::println("  Kernel isolated: YES âœ“");
-    // vga::println("");
-    // vga::println("=== All 3 Phases Complete! ===");
+    vga::println("Identity mapping removed!");
+    
+    vga::println("");
+    vga::println("========================================");
+    vga::println("=== PHASE 3 COMPLETE! ===");
+    vga::println("========================================");
+    vga::println("");
+    vga::println("Kernel Status:");
+    vga::println("  RIP: Higher-half OK");
+    vga::println("  RSP: Higher-half OK");
+    vga::println("  Identity mapping: REMOVED OK");
+    vga::println("  Kernel isolated: YES OK");
+    vga::println("");
+    vga::println("=== All 3 Phases Complete! ===");
     
     loop {
         unsafe { core::arch::asm!("cli; hlt"); }

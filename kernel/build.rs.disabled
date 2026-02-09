@@ -1,0 +1,33 @@
+// kernel/build.rs
+use std::env;
+use std::path::PathBuf;
+
+fn main() {
+    println!("cargo:warning=BUILD.RS IS RUNNING");
+    
+    // Get the output directory
+    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+    
+    // Compile the C code
+    cc::Build::new()
+        .file("../drivers/serial.c")
+        .include("../drivers")
+        .flag("-ffreestanding")
+        .flag("-fno-stack-protector")
+        .flag("-fno-pic")
+        .flag("-mno-red-zone")
+        .flag("-mno-mmx")
+        .flag("-mno-sse")
+        .flag("-mno-sse2")
+        .flag("-mcmodel=kernel")
+        .opt_level(2)
+        .compile("serial");
+    
+    // Tell Rust where to find the library
+    println!("cargo:rustc-link-search=native={}", out_dir.display());
+    println!("cargo:rustc-link-lib=static=serial");
+    
+    // Rerun if C files change
+    println!("cargo:rerun-if-changed=../drivers/serial.c");
+    println!("cargo:rerun-if-changed=../drivers/serial.h");
+}

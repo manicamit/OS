@@ -1,8 +1,15 @@
 use core::ptr::write_volatile;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
-const VGA_BUFFER: usize = 0xB8000;
+pub const VGA_PHYS: u64 = 0xB8000;
 const VGA_WIDTH: usize = 80;
 const VGA_HEIGHT: usize = 25;
+
+// Higher-half address where VGA will be mapped
+pub const VGA_HIGHER_HALF: u64 = 0xFFFF_8000_000B_8000;
+
+// Current VGA buffer address (can be switched from identity to higher-half)
+static VGA_BUFFER: AtomicUsize = AtomicUsize::new(0xB8000);
 
 #[repr(u8)]
 #[allow(dead_code)]
@@ -58,7 +65,7 @@ impl VgaWriter {
     }
 
     fn buffer_ptr(&self) -> *mut VgaChar {
-        VGA_BUFFER as *mut VgaChar
+        VGA_BUFFER.load(Ordering::Relaxed) as *mut VgaChar
     }
 
     pub fn clear_screen(&mut self) {
@@ -141,6 +148,12 @@ pub fn init() {
         let writer = core::ptr::addr_of_mut!(WRITER);
         (*writer).clear_screen();
     }
+}
+
+/// Switch VGA buffer to higher-half address
+/// Call this AFTER mapping VGA_PHYS to VGA_HIGHER_HALF but BEFORE removing identity mapping
+pub fn switch_to_higher_half() {
+    VGA_BUFFER.store(VGA_HIGHER_HALF as usize, Ordering::Relaxed);
 }
 
 #[allow(dead_code)]
