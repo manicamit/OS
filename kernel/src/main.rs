@@ -12,6 +12,14 @@ use crate::vmm::PageTableManager;
 
 pub const KERNEL_VIRT_BASE: u64 = 0xFFFF_8000_0000_0000;
 
+// Static kernel stack in .bss (16KB) - will be in higher-half after kernel mapping
+#[repr(C, align(16))]
+struct StaticStack {
+    data: [u8; 16384],
+}
+
+static mut STATIC_KERNEL_STACK: StaticStack = StaticStack { data: [0; 16384] };
+
 #[panic_handler]
 fn panic(_: &PanicInfo) -> ! {
     vga::println("KERNEL PANIC!");
@@ -212,6 +220,9 @@ fn map_kernel(vmm: &mut PageTableManager) {
     }
     
     vga::println("Kernel mapped!");
+    for _ in 0..(2 * 5_000_000) {
+            unsafe { core::arch::asm!("pause", options(nomem, nostack)); }
+        }
     
     vga::println("");
     vga::println("=== Verification ===");
@@ -231,6 +242,10 @@ fn map_kernel(vmm: &mut PageTableManager) {
     } else {
         vga::println("Kernel mapping: FAILED!");
     }
+
+    for _ in 0..(2 * 5_000_000) {
+            unsafe { core::arch::asm!("pause", options(nomem, nostack)); }
+        }
 }
 
 #[no_mangle]
@@ -262,10 +277,6 @@ pub extern "C" fn _start(e820_ptr: *const E820Entry, e820_count: usize) -> ! {
     // Find ACPI
     find_and_display_rsdp();
     vga::println("");
-
-     for _ in 0..(2 * 5_000_000) {
-        unsafe { core::arch::asm!("pause", options(nomem, nostack)); }
-    }
     
     // Initialize PMM
     vga::println("Initializing PMM...");
@@ -312,8 +323,183 @@ pub extern "C" fn _start(e820_ptr: *const E820Entry, e820_count: usize) -> ! {
     map_kernel(&mut vmm);
     
     vga::println("");
-    vga::println("=== Kernel Ready for Higher-Half Execution ===");
-    vga::println("Kernel initialized successfully.");
+    vga::println("=== Phase 2: Jump to Higher-Half ===");
+    vga::println("(Using current stack - no new stack allocated)");
+    vga::println("");
+    
+    // Get current stack pointer
+    let current_rsp: u64;
+    unsafe {
+        core::arch::asm!("mov {}, rsp", out(reg) current_rsp);
+    }
+    
+    vga::print("Current RSP: ");
+    vga::print_hex(current_rsp);
+    vga::println("");
+    
+    // Calculate jump address
+    let target_phys = higher_half_main as u64;
+    let offset = target_phys - 0x100000;
+    let target_virt = KERNEL_VIRT_BASE + 0x100000 + offset;
+    
+    vga::print("Jump to: ");
+    vga::print_hex(target_virt);
+    vga::println("");
+    vga::println("Jumping NOW...");
+    vga::println("");
+    
+    unsafe {
+        core::arch::asm!(
+            "jmp {target}",
+            target = in(reg) target_virt,
+            options(noreturn)
+        );
+    }
+}
+
+// This function runs in higher-half
+#[no_mangle]
+extern "C" fn higher_half_main() -> ! {
+    vga::println("================================");
+    vga::println("=== HIGHER-HALF SUCCESS! ===");
+    vga::println("================================");
+    vga::println("");
+    
+    let rip: u64;
+    unsafe {
+        core::arch::asm!("lea {}, [rip]", out(reg) rip);
+    }
+    
+    vga::print("RIP: ");
+    vga::print_hex(rip);
+    vga::println("");
+    
+    if rip >= KERNEL_VIRT_BASE {
+        vga::println("Running in higher-half: SUCCESS!");
+    }
+    
+    vga::println("");
+    vga::println("=== Phase 3: Switch Stack & Remove Identity ===");
+    
+    // Get the address of the static stack
+    // Rust will give us the higher-half address since we're running in higher-half
+   // Get the address of the static stack (NO &T!)
+    let stack_higher = unsafe {
+        core::ptr::addr_of_mut!(STATIC_KERNEL_STACK.data) as u64
+    };
+    let new_stack_top = stack_higher + 16384;
+    
+    vga::print("Stack at: ");
+    vga::print_hex(stack_higher);
+    vga::println("");
+    for _ in 0..(2 * 5_000_000) {
+            unsafe { core::arch::asm!("pause", options(nomem, nostack)); }
+        }
+    
+    vga::print("New stack top: ");
+    vga::print_hex(new_stack_top);
+    vga::println("");
+    for _ in 0..(2 * 5_000_000) {
+            unsafe { core::arch::asm!("pause", options(nomem, nostack)); }
+        }
+    
+    // Verify it's in higher-half
+    if stack_higher < KERNEL_VIRT_BASE {
+        vga::println("ERROR: Stack not in higher-half!");
+        loop { unsafe { core::arch::asm!("hlt"); } }
+    }
+    for _ in 0..(2 * 5_000_000) {
+            unsafe { core::arch::asm!("pause", options(nomem, nostack)); }
+        }
+    
+    // Verify we can access it
+    vga::println("Verifying stack is accessible...");
+    unsafe {
+        let test_ptr = stack_higher as *mut u64;
+        core::ptr::write_volatile(test_ptr, 0xDEADBEEF);
+        let test = core::ptr::read_volatile(test_ptr);
+        if test == 0xDEADBEEF {
+            vga::println("Stack is accessible: OK");
+        } else {
+            vga::println("Stack test FAILED!");
+            loop { core::arch::asm!("hlt"); }
+        }
+    }
+    for _ in 0..(2 * 5_000_000) {
+            unsafe { core::arch::asm!("pause", options(nomem, nostack)); }
+        }
+    
+    vga::println("");
+    vga::println("Switching to higher-half stack...");
+
+     for _ in 0..(2 * 5_000_000) {
+            unsafe { core::arch::asm!("pause", options(nomem, nostack)); }
+        }
+    
+    // Switch stack and continue
+    unsafe {
+        core::arch::asm!(
+            "mov rsp, {stack}",
+            "call {func}",
+            stack = in(reg) new_stack_top,
+            func = sym phase3_with_new_stack,
+            options(noreturn)
+        );
+    }
+}
+
+#[no_mangle]
+extern "C" fn phase3_with_new_stack() -> ! {
+    vga::println("Stack switched to higher-half!");
+    
+    let new_rsp: u64;
+    unsafe {
+        core::arch::asm!("mov {}, rsp", out(reg) new_rsp);
+    }
+    
+    vga::print("New RSP: ");
+    vga::print_hex(new_rsp);
+    vga::println("");
+    
+    vga::println("");
+    vga::println("Removing identity mapping...");
+
+    for _ in 0..(2 * 5_000_000) {
+            unsafe { core::arch::asm!("pause", options(nomem, nostack)); }
+        }
+    
+    let pml4_phys = 0x2000u64;
+    let pml4 = pml4_phys as *mut u64;
+    
+    unsafe {
+        // Unmap PML4[0-3]
+        core::ptr::write_volatile(pml4.add(0), 0);
+        core::ptr::write_volatile(pml4.add(1), 0);
+        core::ptr::write_volatile(pml4.add(2), 0);
+        core::ptr::write_volatile(pml4.add(3), 0);
+        
+        // Flush TLB
+        core::arch::asm!(
+            "mov rax, cr3",
+            "mov cr3, rax",
+            out("rax") _,
+        );
+    }
+    
+    // vga::println("Identity mapping removed!");
+    // 
+    // vga::println("");
+    // vga::println("========================================");
+    // vga::println("=== PHASE 3 COMPLETE! ===");
+    // vga::println("========================================");
+    // vga::println("");
+    // vga::println("Kernel Status:");
+    // vga::println("  RIP: Higher-half âœ“");
+    // vga::println("  RSP: Higher-half âœ“");
+    // vga::println("  Identity mapping: REMOVED âœ“");
+    // vga::println("  Kernel isolated: YES âœ“");
+    // vga::println("");
+    // vga::println("=== All 3 Phases Complete! ===");
     
     loop {
         unsafe { core::arch::asm!("cli; hlt"); }
