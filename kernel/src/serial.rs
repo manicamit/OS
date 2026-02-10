@@ -83,3 +83,48 @@ macro_rules! serial_println {
         $crate::serial::write_str("\n");
     }};
 }
+
+// Convenience wrappers to match vga.rs API
+pub fn print(s: &str) {
+    write_str(s);
+}
+
+pub fn println(s: &str) {
+    writeln(s);
+}
+
+pub fn print_hex(mut num: u64) {
+    write_str("0x");
+    
+    for i in (0..16).rev() {
+        let nibble = ((num >> (i * 4)) & 0xF) as u8;
+        let ch = if nibble < 10 {
+            b'0' + nibble
+        } else {
+            b'A' + (nibble - 10)
+        };
+        write_byte(ch);
+    }
+}
+
+pub fn print_num(mut num: u64) {
+    if num == 0 {
+        write_byte(b'0');
+        return;
+    }
+    
+    let mut buf = [0u8; 20];
+    let mut i = 0;
+    
+    while num > 0 {
+        buf[i] = b'0' + (num % 10) as u8;
+        num /= 10;
+        i += 1;
+    }
+    
+    while i > 0 {
+        i -= 1;
+        write_byte(buf[i]);
+    }
+}
+

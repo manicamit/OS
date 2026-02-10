@@ -5,6 +5,7 @@ mod idt;
 mod vga;
 mod pmm;
 mod vmm;
+mod serial;
 
 use core::panic::PanicInfo;
 use pmm::PhysicalMemoryManager;
@@ -337,6 +338,7 @@ pub extern "C" fn _start(e820_ptr: *const E820Entry, e820_count: usize) -> ! {
     }
     
     vga::init();
+    serial::init();
     idt::init();
     
     vga::println("=== Kernel Boot ===");
@@ -590,6 +592,7 @@ extern "C" fn phase3_with_new_stack() -> ! {
     vga::println("  RSP: Higher-half OK");
     vga::println("  Identity mapping: REMOVED OK");
     vga::println("  Kernel isolated: YES OK");
+    serial::println(" Serial Works");
     vga::println("");
     vga::println("=== All 3 Phases Complete! ===");
     
