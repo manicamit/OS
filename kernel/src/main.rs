@@ -1,17 +1,25 @@
 #![no_std]
 #![no_main]
 
+extern crate alloc;
+
 mod idt;
 mod vga;
 mod pmm;
 mod vmm;
 mod serial;
+mod allocator;
 
 use core::panic::PanicInfo;
 use pmm::PhysicalMemoryManager;
 use crate::vmm::PageTableManager;
 
 pub const KERNEL_VIRT_BASE: u64 = 0xFFFF_8000_0000_0000;
+
+// Store PMM state for use after stack switch
+// (PMM is consumed by VMM, but we need to allocate heap frames later)
+static mut PMM_CURRENT: u64 = 0;
+static mut PMM_END: u64 = 0;
 
 // Static kernel stack in .bss (16KB) - will be in higher-half after kernel mapping
 #[repr(C, align(16))]
@@ -392,6 +400,13 @@ pub extern "C" fn _start(e820_ptr: *const E820Entry, e820_count: usize) -> ! {
     let phys_low = pmm.alloc_frame().expect("No frames");
     let phys_high = pmm.alloc_frame().expect("No frames");
     
+    // Save PMM state before it gets consumed by VMM
+    let (pmm_cur, pmm_end) = pmm.get_state();
+    unsafe {
+        PMM_CURRENT = pmm_cur;
+        PMM_END = pmm_end;
+    }
+    
     let mut vmm = unsafe {
         PageTableManager::new(pml4_phys, &mut pmm)
     };
@@ -582,6 +597,12 @@ extern "C" fn phase3_with_new_stack() -> ! {
     
     vga::println("Identity mapping removed!");
     
+    // Reload IDT with higher-half addresses
+    // Handler function pointers now resolve to higher-half via RIP-relative addressing
+    idt::reload_idt();
+    vga::println("IDT reloaded for higher-half");
+    serial::println("IDT reloaded for higher-half");
+    
     vga::println("");
     vga::println("========================================");
     vga::println("=== PHASE 3 COMPLETE! ===");
@@ -595,6 +616,34 @@ extern "C" fn phase3_with_new_stack() -> ! {
     serial::println(" Serial Works");
     vga::println("");
     vga::println("=== All 3 Phases Complete! ===");
+    
+    // === Phase 4: Heap Allocator ===
+    vga::println("");
+    
+    let pmm_cur = unsafe { PMM_CURRENT };
+    let pmm_end = unsafe { PMM_END };
+    
+    match allocator::init_heap(pmm_cur, pmm_end) {
+        Ok(new_pmm_cur) => {
+            // Update stored PMM state
+            unsafe { PMM_CURRENT = new_pmm_cur; }
+        }
+        Err(e) => {
+            vga::print("HEAP INIT FAILED: ");
+            vga::println(e);
+            serial::print("HEAP INIT FAILED: ");
+            serial::println(e);
+            loop { unsafe { core::arch::asm!("cli; hlt"); } }
+        }
+    }
+    
+    // Run allocator tests
+    allocator::test_allocator();
+    
+    vga::println("");
+    vga::println("========================================");
+    vga::println("=== All 4 Phases Complete! ===");
+    vga::println("========================================");
     
     loop {
         unsafe { core::arch::asm!("cli; hlt"); }

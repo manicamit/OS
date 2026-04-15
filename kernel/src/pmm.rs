@@ -37,6 +37,17 @@ impl PhysicalMemoryManager {
         })
     }
 
+    /// Get the current PMM state (current pointer, end pointer)
+    /// Used by heap init to allocate frames independently
+    pub fn get_state(&self) -> (u64, u64) {
+        (self.current, self.end)
+    }
+
+    /// Advance the PMM's current pointer (call after external allocation)
+    pub fn advance_to(&mut self, new_current: u64) {
+        self.current = new_current;
+    }
+
     pub fn alloc_frame(&mut self) -> Option<u64> {
         if self.current + PAGE_SIZE > self.end {
             return None;
