@@ -28,6 +28,19 @@ impl PhysicalMemoryManager {
             return None;
         }
 
+        // IMPORTANT: The kernel is loaded at 0x100000 and takes up space.
+        // We MUST NOT allocate frames that overlap the kernel!
+        // The safest approach for now is to skip the first 2MB entirely (up to 0x200000).
+        let kernel_end = 0x0020_0000;
+        if best_base < kernel_end {
+            let diff = kernel_end - best_base;
+            if best_len <= diff {
+                return None; // This block is entirely consumed by the kernel
+            }
+            best_base = kernel_end;
+            best_len -= diff;
+        }
+
         let start = align_up(best_base, PAGE_SIZE);
         let end = best_base + best_len;
 

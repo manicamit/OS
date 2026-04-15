@@ -1,7 +1,11 @@
 #![no_std]
 #![no_main]
 
-mod vga;
+pub mod serial;
+pub mod vga;
+pub mod vmm;
+pub mod idt;
+pub mod gdt;
 
 use core::panic::PanicInfo;
 use vga::{Color, Writer};

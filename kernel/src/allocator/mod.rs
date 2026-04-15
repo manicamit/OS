@@ -88,63 +88,84 @@ unsafe fn flush_tlb_page(virt: u64) {
     core::arch::asm!("invlpg [{}]", in(reg) virt, options(nostack, preserves_flags));
 }
 
-/// Map a single 4KiB virtual page to a physical frame using recursive page tables.
-unsafe fn map_heap_page(virt: u64, phys: u64, flags: u64, frame_alloc: &mut HeapFrameAllocator) -> bool {
+pub unsafe fn map_heap_page(virt: u64, phys: u64, flags: u64, frame_alloc: &mut HeapFrameAllocator) -> bool {
     let pml4_i = (virt >> 39) & 0x1FF;
     let pdpt_i = (virt >> 30) & 0x1FF;
     let pd_i   = (virt >> 21) & 0x1FF;
     let pt_i   = (virt >> 12) & 0x1FF;
 
-    // Step 1: Ensure PDPT exists
+    crate::serial::print("map_heap virt:"); crate::serial::print_hex(virt);
+    crate::serial::print(" phys:"); crate::serial::print_hex(phys);
+    crate::serial::println("");
+
     let pml4_e = pml4_entry_ptr(pml4_i);
-    if (core::ptr::read_volatile(pml4_e) & 1) == 0 {
+    let mut pml4_val = core::ptr::read_volatile(pml4_e);
+    if (pml4_val & 1) == 0 {
+        crate::serial::println("  > Alloc PDPT");
         let frame = match frame_alloc.alloc_frame() {
             Some(f) => f,
-            None => return false,
+            None => { crate::serial::println("  > FAIL PDPT"); return false; },
         };
+        crate::serial::print("  > Frame: "); crate::serial::print_hex(frame); crate::serial::println("");
         core::ptr::write_volatile(pml4_e, frame | 0x3);
-        flush_tlb_all();
-        // Zero the new PDPT via its recursive address
+        
         let pdpt_base = make_recursive_va(RECURSIVE_INDEX, RECURSIVE_INDEX, RECURSIVE_INDEX, pml4_i) as *mut u64;
+        crate::serial::print("  > Zeroing "); crate::serial::print_hex(pdpt_base as u64); crate::serial::println("");
         for j in 0..512u64 {
             core::ptr::write_volatile(pdpt_base.add(j as usize), 0u64);
         }
+        crate::serial::println("  > Zeroed PDPT");
     }
 
-    // Step 2: Ensure PD exists
     let pdpt_e = pdpt_entry_ptr(pml4_i, pdpt_i);
-    if (core::ptr::read_volatile(pdpt_e) & 1) == 0 {
+    // crate::serial::print("  > Read PDPT_e "); 
+    //crate::serial::print_hex(pdpt_e as u64); crate::serial::println("");
+    let mut pdpt_val = core::ptr::read_volatile(pdpt_e);
+    if (pdpt_val & 1) == 0 {
+        crate::serial::println("  > Alloc PD");
         let frame = match frame_alloc.alloc_frame() {
             Some(f) => f,
             None => return false,
         };
+        crate::serial::print("  > Frame: "); crate::serial::print_hex(frame); crate::serial::println("");
         core::ptr::write_volatile(pdpt_e, frame | 0x3);
-        flush_tlb_all();
+
         let pd_base = make_recursive_va(RECURSIVE_INDEX, RECURSIVE_INDEX, pml4_i, pdpt_i) as *mut u64;
+        crate::serial::print("  > Zeroing "); crate::serial::print_hex(pd_base as u64); crate::serial::println("");
         for j in 0..512u64 {
             core::ptr::write_volatile(pd_base.add(j as usize), 0u64);
         }
+        crate::serial::println("  > Zeroed PD");
     }
 
-    // Step 3: Ensure PT exists
     let pd_e = pd_entry_ptr(pml4_i, pdpt_i, pd_i);
-    if (core::ptr::read_volatile(pd_e) & 1) == 0 {
+    //crate::serial::print("  > Read PD_e "); 
+    //crate::serial::print_hex(pd_e as u64); crate::serial::println("");
+    let mut pd_val = core::ptr::read_volatile(pd_e);
+    if (pd_val & 1) == 0 {
+        crate::serial::println("  > Alloc PT");
         let frame = match frame_alloc.alloc_frame() {
             Some(f) => f,
             None => return false,
         };
+        crate::serial::print("  > Frame: "); crate::serial::print_hex(frame); crate::serial::println("");
         core::ptr::write_volatile(pd_e, frame | 0x3);
-        flush_tlb_all();
+
         let pt_base = make_recursive_va(RECURSIVE_INDEX, pml4_i, pdpt_i, pd_i) as *mut u64;
+        crate::serial::print("  > Zeroing "); crate::serial::print_hex(pt_base as u64); crate::serial::println("");
         for j in 0..512u64 {
             core::ptr::write_volatile(pt_base.add(j as usize), 0u64);
         }
+        crate::serial::println("  > Zeroed PT");
     }
 
-    // Step 4: Map the page
     let pt_e = pt_entry_ptr(pml4_i, pdpt_i, pd_i, pt_i);
+    //crate::serial::print("  > Write PT_e "); 
+    //crate::serial::print_hex(pt_e as u64); crate::serial::println("");
     core::ptr::write_volatile(pt_e, phys | flags | 0x1);
-    flush_tlb_page(virt);
+    
+    // Minimal TLB flush
+    core::arch::asm!("invlpg [{}]", in(reg) virt, options(nostack, preserves_flags));
 
     true
 }
@@ -182,27 +203,39 @@ pub fn init_heap(pmm_current: u64, pmm_end: u64) -> Result<u64, &'static str> {
     for i in 0..num_pages {
         let virt_addr = (HEAP_START + i * 4096) as u64;
         
+        // crate::serial::print("L: ");
+        // crate::serial::print_num(i as u64);
+        // crate::serial::println("");
+
         let phys_frame = match frame_alloc.alloc_frame() {
             Some(f) => f,
-            None => return Err("Out of physical memory for heap"),
+            None => {
+                crate::serial::println("ERR: OOM");
+                return Err("Out of physical memory for heap");
+            }
         };
+
+        // crate::serial::println(" > Doing map...");
 
         let ok = unsafe {
             map_heap_page(virt_addr, phys_frame, 0x2, &mut frame_alloc)
         };
 
+        // crate::serial::println(" > Map done");
+
         if !ok {
+            crate::serial::println("ERR: map_heap_page false");
             return Err("Failed to map heap page");
         }
 
         if i < 3 || i == num_pages - 1 {
-            serial::print("  page ");
-            serial::print_num(i as u64);
-            serial::print(" virt=");
-            serial::print_hex(virt_addr);
-            serial::print(" -> phys=");
-            serial::print_hex(phys_frame);
-            serial::println("");
+            crate::serial::print("  page ");
+            crate::serial::print_num(i as u64);
+            crate::serial::print(" virt=");
+            crate::serial::print_hex(virt_addr);
+            crate::serial::print(" -> phys=");
+            crate::serial::print_hex(phys_frame);
+            crate::serial::println("");
         }
     }
     
@@ -259,6 +292,26 @@ unsafe impl<T: GlobalAlloc> GlobalAlloc for Locked<T> {
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         self.lock().dealloc(ptr, layout)
     }
+
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        let new_layout = Layout::from_size_align_unchecked(new_size, layout.align());
+        let new_ptr = self.lock().alloc(new_layout);
+        if !new_ptr.is_null() {
+            let copy_size = core::cmp::min(layout.size(), new_size);
+            core::ptr::copy_nonoverlapping(ptr, new_ptr, copy_size);
+            self.lock().dealloc(ptr, layout);
+        }
+        new_ptr
+    }
+
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        let size = layout.size();
+        let ptr = self.alloc(layout);
+        if !ptr.is_null() {
+            core::ptr::write_bytes(ptr, 0, size);
+        }
+        ptr
+    }
 }
 
 unsafe impl<T> Sync for Locked<T> {}
@@ -269,6 +322,9 @@ pub fn test_allocator() {
     use alloc::vec::Vec;
     use crate::serial;
     use crate::vga;
+
+    // Test panic
+    //panic!("Testing panic handler!");
 
     vga::println("");
     vga::println("=== Testing Heap Allocator ===");
@@ -289,9 +345,17 @@ pub fn test_allocator() {
     vga::println("Test 2: Vec<u32>");
     serial::println("Test 2: Vec<u32>");
     let mut vec = Vec::new();
+    serial::println("  Vec::new OK");
     for i in 0..500u32 {
+        serial::print_num(i as u64);
         vec.push(i);
+        if i % 100 == 0 {
+            serial::print("    push ");
+            serial::print_num(i as u64);
+            serial::println("");
+        }
     }
+    serial::println("  push loop OK");
     assert_eq!(vec.iter().sum::<u32>(), (499 * 500) / 2);
     vga::println("  Vec allocation: OK");
     serial::println("  Vec allocation: OK");

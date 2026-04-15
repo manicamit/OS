@@ -1,5 +1,6 @@
 #![no_std]
 #![no_main]
+#![feature(alloc_error_handler)]
 
 extern crate alloc;
 
@@ -9,10 +10,81 @@ mod pmm;
 mod vmm;
 mod serial;
 mod allocator;
+mod gdt;
 
 use core::panic::PanicInfo;
 use pmm::PhysicalMemoryManager;
 use crate::vmm::PageTableManager;
+
+#[alloc_error_handler]
+fn alloc_error_handler(_layout: core::alloc::Layout) -> ! {
+    crate::serial::println("PANIC: Out of memory / Alloc Error!");
+    loop {
+        unsafe { core::arch::asm!("hlt"); }
+    }
+}
+
+// =============================================================================
+// Compiler built-in memory intrinsics
+// LLVM lowers core::ptr::copy / copy_nonoverlapping / write_bytes into calls
+// to these C-ABI symbols. In #![no_std] without libc they must be provided
+// explicitly, otherwise the linker resolves them to 0x0 → instant #PF.
+// =============================================================================
+
+#[no_mangle]
+pub unsafe extern "C" fn memcpy(dest: *mut u8, src: *const u8, n: usize) -> *mut u8 {
+    let mut i = 0;
+    while i < n {
+        *dest.add(i) = *src.add(i);
+        i += 1;
+    }
+    dest
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn memmove(dest: *mut u8, src: *const u8, n: usize) -> *mut u8 {
+    if (dest as usize) < (src as usize) {
+        // Copy forward
+        let mut i = 0;
+        while i < n {
+            *dest.add(i) = *src.add(i);
+            i += 1;
+        }
+    } else {
+        // Copy backward (handles overlapping regions)
+        let mut i = n;
+        while i > 0 {
+            i -= 1;
+            *dest.add(i) = *src.add(i);
+        }
+    }
+    dest
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn memset(dest: *mut u8, c: i32, n: usize) -> *mut u8 {
+    let val = c as u8;
+    let mut i = 0;
+    while i < n {
+        *dest.add(i) = val;
+        i += 1;
+    }
+    dest
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn memcmp(s1: *const u8, s2: *const u8, n: usize) -> i32 {
+    let mut i = 0;
+    while i < n {
+        let a = *s1.add(i);
+        let b = *s2.add(i);
+        if a != b {
+            return a as i32 - b as i32;
+        }
+        i += 1;
+    }
+    0
+}
 
 pub const KERNEL_VIRT_BASE: u64 = 0xFFFF_8000_0000_0000;
 
@@ -338,8 +410,69 @@ unsafe fn map_vga_to_higher_half() {
     );
 }
 
+extern "C" {
+    static __rela_start: u8;
+    static __rela_end: u8;
+}
+
 #[no_mangle]
 pub extern "C" fn _start(e820_ptr: *const E820Entry, e820_count: usize) -> ! {
+    // =========================================================================
+    // Process ELF relocations FIRST — before any code that uses the GOT.
+    // The flat binary loader doesn't process .rela.dyn, so GOT entries like
+    // the memcpy pointer used by alloc::raw_vec::finish_grow are 0x0.
+    // R_X86_64_RELATIVE: *offset = base + addend  (base=0 for us)
+    // =========================================================================
+    unsafe {
+        let mut rela_start: usize;
+        let mut rela_end: usize;
+        core::arch::asm!(
+            "lea {0}(%rip), {1}",
+            sym __rela_start,
+            out(reg) rela_start,
+            options(att_syntax, nomem, nostack)
+        );
+        core::arch::asm!(
+            "lea {0}(%rip), {1}",
+            sym __rela_end,
+            out(reg) rela_end,
+            options(att_syntax, nomem, nostack)
+        );
+        crate::serial::print("Relocating from ");
+        crate::serial::print_hex(rela_start as u64);
+        crate::serial::print(" to ");
+        crate::serial::print_hex(rela_end as u64);
+        crate::serial::println("");
+
+        let mut pos = rela_start;
+        while pos + 24 <= rela_end {
+            let offset = *(pos as *const u64);
+            let info = *((pos + 8) as *const u64);
+            let addend = *((pos + 16) as *const u64);
+            let rela_type = (info & 0xFFFF_FFFF) as u32;
+            
+            crate::serial::print("Reloc: target=");
+            crate::serial::print_hex(offset);
+            crate::serial::print(" type=");
+            crate::serial::print_num(rela_type as u64);
+            crate::serial::print(" addend=");
+            crate::serial::print_hex(addend);
+            
+            // R_X86_64_RELATIVE = 8
+            if rela_type == 8 {
+                let target = offset as *mut u64;
+                // Add the higher-half bias because the GOT requires absolute
+                // virtual addresses, but our linker thinks we're at 1M.
+                let new_val = addend + crate::KERNEL_VIRT_BASE;
+                core::ptr::write_volatile(target, new_val);
+                crate::serial::print(" -> wrote ");
+                crate::serial::print_hex(new_val);
+            }
+            crate::serial::println("");
+            pos += 24;
+        }
+    }
+
     // Delay 2 seconds before starting
     for _ in 0..(2 * 5_000_000) {
         unsafe { core::arch::asm!("pause", options(nomem, nostack)); }
@@ -400,12 +533,7 @@ pub extern "C" fn _start(e820_ptr: *const E820Entry, e820_count: usize) -> ! {
     let phys_low = pmm.alloc_frame().expect("No frames");
     let phys_high = pmm.alloc_frame().expect("No frames");
     
-    // Save PMM state before it gets consumed by VMM
-    let (pmm_cur, pmm_end) = pmm.get_state();
-    unsafe {
-        PMM_CURRENT = pmm_cur;
-        PMM_END = pmm_end;
-    }
+    // Wait to save PMM state until vmm is done natively consuming frames
     
     let mut vmm = unsafe {
         PageTableManager::new(pml4_phys, &mut pmm)
@@ -419,6 +547,13 @@ pub extern "C" fn _start(e820_ptr: *const E820Entry, e820_count: usize) -> ! {
     
     // Map kernel
     map_kernel(&mut vmm);
+
+    // Now save PMM state
+    let (pmm_cur, pmm_end) = pmm.get_state();
+    unsafe {
+        PMM_CURRENT = pmm_cur;
+        PMM_END = pmm_end;
+    }
     
     vga::println("");
     vga::println("=== Phase 2: Jump to Higher-Half ===");
@@ -598,10 +733,18 @@ extern "C" fn phase3_with_new_stack() -> ! {
     vga::println("Identity mapping removed!");
     
     // Reload IDT with higher-half addresses
-    // Handler function pointers now resolve to higher-half via RIP-relative addressing
     idt::reload_idt();
     vga::println("IDT reloaded for higher-half");
     serial::println("IDT reloaded for higher-half");
+    
+    // Load higher-half GDT to replace bootloader's GDT
+    gdt::init();
+    vga::println("GDT reloaded for higher-half");
+    serial::println("GDT reloaded for higher-half");
+
+    serial::print("IDT PF Handler Addr: ");
+    serial::print_hex(idt::get_pf_handler_addr());
+    serial::println("");
     
     vga::println("");
     vga::println("========================================");
@@ -615,8 +758,6 @@ extern "C" fn phase3_with_new_stack() -> ! {
     vga::println("  Kernel isolated: YES OK");
     serial::println(" Serial Works");
     vga::println("");
-    vga::println("=== All 3 Phases Complete! ===");
-    
     // === Phase 4: Heap Allocator ===
     vga::println("");
     

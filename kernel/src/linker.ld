@@ -21,7 +21,16 @@ SECTIONS {
     .data ALIGN(4K) : {
         __data_start = .;
         *(.data*)
+        *(.got*)
         __data_end = .;
+    }
+
+    /* Capture .rela.dyn bounds so the kernel can process relocations at boot */
+    .rela.dyn ALIGN(8) : {
+        __rela_start = .;
+        *(.rela.dyn)
+        *(.rela.plt)
+        __rela_end = .;
     }
     
     .bss ALIGN(4K) : {
@@ -36,5 +45,10 @@ SECTIONS {
     /DISCARD/ : {
         *(.eh_frame)
         *(.note*)
+        *(.dynamic)
+        *(.dynsym)
+        *(.dynstr)
+        *(.gnu.hash)
+        *(.hash)
     }
 }

@@ -118,36 +118,12 @@ fn exception_common(name: &str, has_error_code: bool) {
     }
 }
 
-// Divide by Zero (#DE) - no error code
+// Divide by Zero (#DE)
 #[unsafe(naked)]
 extern "C" fn divide_by_zero_handler() {
     unsafe {
         naked_asm!(
             "cli",
-            "push rax",
-            "push rbx",
-            "mov rax, 0xB8000",
-            
-            // Clear screen
-            "mov rbx, 0",
-            "1:",
-            "mov word ptr [rax + rbx*2], 0x0F20",
-            "inc rbx",
-            "cmp rbx, 2000",
-            "jl 1b",
-            
-            // Write "DIVIDE BY ZERO"
-            "mov word ptr [rax + 0], 0x4F44",   // Red 'D'
-            "mov word ptr [rax + 2], 0x4F49",   // Red 'I'
-            "mov word ptr [rax + 4], 0x4F56",   // Red 'V'
-            "mov word ptr [rax + 6], 0x4F49",   // Red 'I'
-            "mov word ptr [rax + 8], 0x4F44",   // Red 'D'
-            "mov word ptr [rax + 10], 0x4F45",  // Red 'E'
-            "mov word ptr [rax + 12], 0x4F20",  // Red ' '
-            "mov word ptr [rax + 14], 0x4F42",  // Red 'B'
-            "mov word ptr [rax + 16], 0x4F59",  // Red 'Y'
-            "mov word ptr [rax + 18], 0x4F20",  // Red ' '
-            "mov word ptr [rax + 20], 0x4F5A",  // Red 'Z'
             "mov word ptr [rax + 22], 0x4F45",  // Red 'E'
             "mov word ptr [rax + 24], 0x4F52",  // Red 'R'
             "mov word ptr [rax + 26], 0x4F4F",  // Red 'O'
@@ -165,31 +141,23 @@ extern "C" fn general_protection_fault_handler() {
     unsafe {
         naked_asm!(
             "cli",
-            "push rax",
-            "push rbx",
-            "mov rax, 0xB8000",
+            // Use serial output
+            "mov dx, 0x3FD",
+            "1:", "in al, dx", "test al, 0x20", "jz 1b",
+            "mov dx, 0x3F8", "mov al, 0x47", "out dx, al",  // 'G'
+            "mov dx, 0x3FD",
+            "2:", "in al, dx", "test al, 0x20", "jz 2b",
+            "mov dx, 0x3F8", "mov al, 0x50", "out dx, al",  // 'P'
+            "mov dx, 0x3FD",
+            "3:", "in al, dx", "test al, 0x20", "jz 3b",
+            "mov dx, 0x3F8", "mov al, 0x21", "out dx, al",  // '!'
+            "mov dx, 0x3FD",
+            "4:", "in al, dx", "test al, 0x20", "jz 4b",
+            "mov dx, 0x3F8", "mov al, 0x0A", "out dx, al",  // '\n'
             
-            // Clear screen
-            "mov rbx, 0",
-            "1:",
-            "mov word ptr [rax + rbx*2], 0x0F20",
-            "inc rbx",
-            "cmp rbx, 2000",
-            "jl 1b",
-            
-            // Write "GP FAULT"
-            "mov word ptr [rax + 0], 0x4F47",   // Red 'G'
-            "mov word ptr [rax + 2], 0x4F50",   // Red 'P'
-            "mov word ptr [rax + 4], 0x4F20",   // Red ' '
-            "mov word ptr [rax + 6], 0x4F46",   // Red 'F'
-            "mov word ptr [rax + 8], 0x4F41",   // Red 'A'
-            "mov word ptr [rax + 10], 0x4F55",  // Red 'U'
-            "mov word ptr [rax + 12], 0x4F4C",  // Red 'L'
-            "mov word ptr [rax + 14], 0x4F54",  // Red 'T'
-            
-            "2:",
+            "5:",
             "hlt",
-            "jmp 2b",
+            "jmp 5b",
         )
     }
 }
@@ -377,4 +345,8 @@ pub fn reload_idt() {
         // The IDT static is also at a higher-half address (RIP-relative)
         (*idt_ptr).load();
     }
+}
+
+pub fn get_pf_handler_addr() -> u64 {
+    page_fault_handler as u64
 }
