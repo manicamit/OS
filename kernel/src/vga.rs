@@ -4,32 +4,17 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 pub const VGA_PHYS: u64 = 0xB8000;
 const VGA_WIDTH: usize = 80;
 const VGA_HEIGHT: usize = 25;
-
-// Higher-half address where VGA will be mapped
 pub const VGA_HIGHER_HALF: u64 = 0xFFFF_8000_000B_8000;
 
-// Current VGA buffer address (can be switched from identity to higher-half)
 static VGA_BUFFER: AtomicUsize = AtomicUsize::new(0xB8000);
 
 #[repr(u8)]
 #[allow(dead_code)]
 pub enum Color {
-    Black = 0x0,
-    Blue = 0x1,
-    Green = 0x2,
-    Cyan = 0x3,
-    Red = 0x4,
-    Magenta = 0x5,
-    Brown = 0x6,
-    LightGray = 0x7,
-    DarkGray = 0x8,
-    LightBlue = 0x9,
-    LightGreen = 0xA,
-    LightCyan = 0xB,
-    LightRed = 0xC,
-    Pink = 0xD,
-    Yellow = 0xE,
-    White = 0xF,
+    Black = 0x0, Blue = 0x1, Green = 0x2, Cyan = 0x3,
+    Red = 0x4, Magenta = 0x5, Brown = 0x6, LightGray = 0x7,
+    DarkGray = 0x8, LightBlue = 0x9, LightGreen = 0xA, LightCyan = 0xB,
+    LightRed = 0xC, Pink = 0xD, Yellow = 0xE, White = 0xF,
 }
 
 #[derive(Clone, Copy)]
@@ -57,11 +42,7 @@ pub struct VgaWriter {
 
 impl VgaWriter {
     pub const fn new() -> Self {
-        Self {
-            column: 0,
-            row: 0,
-            color: ColorCode::new(Color::LightGray, Color::Black),
-        }
+        Self { column: 0, row: 0, color: ColorCode::new(Color::LightGray, Color::Black) }
     }
 
     fn buffer_ptr(&self) -> *mut VgaChar {
@@ -81,23 +62,13 @@ impl VgaWriter {
     fn write_at(&self, byte: u8, row: usize, col: usize) {
         let index = row * VGA_WIDTH + col;
         unsafe {
-            write_volatile(
-                self.buffer_ptr().add(index),
-                VgaChar {
-                    ascii: byte,
-                    color: self.color,
-                },
-            );
+            write_volatile(self.buffer_ptr().add(index), VgaChar { ascii: byte, color: self.color });
         }
     }
 
     fn new_line(&mut self) {
         self.column = 0;
-        if self.row < VGA_HEIGHT - 1 {
-            self.row += 1;
-        } else {
-            self.scroll();
-        }
+        if self.row < VGA_HEIGHT - 1 { self.row += 1; } else { self.scroll(); }
     }
 
     fn scroll(&mut self) {
@@ -111,19 +82,14 @@ impl VgaWriter {
                 }
             }
         }
-        // clear last line
-        for col in 0..VGA_WIDTH {
-            self.write_at(b' ', VGA_HEIGHT - 1, col);
-        }
+        for col in 0..VGA_WIDTH { self.write_at(b' ', VGA_HEIGHT - 1, col); }
     }
 
     pub fn write_byte(&mut self, byte: u8) {
         match byte {
             b'\n' => self.new_line(),
             byte => {
-                if self.column >= VGA_WIDTH {
-                    self.new_line();
-                }
+                if self.column >= VGA_WIDTH { self.new_line(); }
                 self.write_at(byte, self.row, self.column);
                 self.column += 1;
             }
@@ -131,15 +97,9 @@ impl VgaWriter {
     }
 
     pub fn write_str(&mut self, s: &str) {
-        for byte in s.bytes() {
-            self.write_byte(byte);
-        }
+        for byte in s.bytes() { self.write_byte(byte); }
     }
 }
-
-/* ===============================
-   Global writer (early kernel)
-   =============================== */
 
 static mut WRITER: VgaWriter = VgaWriter::new();
 
@@ -150,81 +110,49 @@ pub fn init() {
     }
 }
 
-/// Switch VGA buffer to higher-half address
-/// Call this AFTER mapping VGA_PHYS to VGA_HIGHER_HALF but BEFORE removing identity mapping
 pub fn switch_to_higher_half() {
     VGA_BUFFER.store(VGA_HIGHER_HALF as usize, Ordering::Relaxed);
 }
 
 #[allow(dead_code)]
 pub fn print(s: &str) {
-    unsafe {
-        let writer = core::ptr::addr_of_mut!(WRITER);
-        (*writer).write_str(s);
-    }
+    unsafe { let w = core::ptr::addr_of_mut!(WRITER); (*w).write_str(s); }
 }
 
 pub fn println(s: &str) {
-    unsafe {
-        let writer = core::ptr::addr_of_mut!(WRITER);
-        (*writer).write_str(s);
-        (*writer).write_byte(b'\n');
-    }
+    unsafe { let w = core::ptr::addr_of_mut!(WRITER); (*w).write_str(s); (*w).write_byte(b'\n'); }
 }
 
-
-/// Print a decimal number
 pub fn print_num(n: u64) {
-    if n == 0 {
-        print("0");
-        return;
-    }
-    
+    if n == 0 { print("0"); return; }
     let mut num = n;
     let mut divisor = 1u64;
-    
-    while divisor <= num / 10 {
-        divisor *= 10;
-    }
-    
+    while divisor <= num / 10 { divisor *= 10; }
     while divisor > 0 {
         let digit = (num / divisor) as u8;
-        unsafe {
-            let writer = core::ptr::addr_of_mut!(WRITER);
-            (*writer).write_byte(b'0' + digit);
-        }
+        unsafe { let w = core::ptr::addr_of_mut!(WRITER); (*w).write_byte(b'0' + digit); }
         num %= divisor;
         divisor /= 10;
     }
 }
 
-/// Print a hexadecimal number with 0x prefix
 pub fn print_hex(n: u64) {
     print("0x");
-    
     for i in (0..16).rev() {
         let nibble = ((n >> (i * 4)) & 0xF) as u8;
-        let ch = if nibble < 10 {
-            b'0' + nibble
-        } else {
-            b'A' + (nibble - 10)
-        };
-        
-        unsafe {
-            let writer = core::ptr::addr_of_mut!(WRITER);
-            (*writer).write_byte(ch);
+        let ch = if nibble < 10 { b'0' + nibble } else { b'A' + (nibble - 10) };
+        unsafe { let w = core::ptr::addr_of_mut!(WRITER); (*w).write_byte(ch); }
+    }
+}
+
+pub fn print_ascii(bytes: &[u8]) {
+    for &byte in bytes {
+        if byte >= 0x20 && byte <= 0x7E {
+            unsafe { let w = core::ptr::addr_of_mut!(WRITER); (*w).write_byte(byte); }
         }
     }
 }
 
-/// Print a byte array as ASCII (filtering non-printable characters)
-pub fn print_ascii(bytes: &[u8]) {
-    for &byte in bytes {
-        if byte >= 0x20 && byte <= 0x7E {
-            unsafe {
-                let writer = core::ptr::addr_of_mut!(WRITER);
-                (*writer).write_byte(byte);
-            }
-        }
-    }
+pub fn print_char(ch: char) {
+    unsafe { let w = core::ptr::addr_of_mut!(WRITER); (*w).write_byte(ch as u8); }
 }

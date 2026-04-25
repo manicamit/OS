@@ -1,46 +1,30 @@
-// kernel/src/serial.rs
-//! Simple serial port driver for debugging
-
 use core::fmt;
 
-const SERIAL_PORT: u16 = 0x3F8; // COM1
+const SERIAL_PORT: u16 = 0x3F8;
 
-/// Initialize serial port
 pub fn init() {
     unsafe {
-        // Disable interrupts
         outb(SERIAL_PORT + 1, 0x00);
-        // Enable DLAB
         outb(SERIAL_PORT + 3, 0x80);
-        // Set divisor to 3 (38400 baud)
         outb(SERIAL_PORT + 0, 0x03);
         outb(SERIAL_PORT + 1, 0x00);
-        // 8 bits, no parity, one stop bit
         outb(SERIAL_PORT + 3, 0x03);
-        // Enable FIFO
         outb(SERIAL_PORT + 2, 0xC7);
-        // Mark data terminal ready
         outb(SERIAL_PORT + 4, 0x0B);
     }
 }
 
-/// Write a byte to serial port
-fn write_byte(byte: u8) {
+pub fn write_byte(byte: u8) {
     unsafe {
-        // Wait for transmit buffer to be empty
         while (inb(SERIAL_PORT + 5) & 0x20) == 0 {}
         outb(SERIAL_PORT, byte);
     }
 }
 
-/// Write a string to serial
 pub fn write_str(s: &str) {
-    for byte in s.bytes() {
-        write_byte(byte);
-    }
+    for byte in s.bytes() { write_byte(byte); }
 }
 
-/// Write with newline
 pub fn writeln(s: &str) {
     write_str(s);
     write_str("\n");
@@ -56,7 +40,6 @@ unsafe fn inb(port: u16) -> u8 {
     value
 }
 
-// Formatter for easy printing
 pub struct SerialWriter;
 
 impl fmt::Write for SerialWriter {
@@ -84,47 +67,26 @@ macro_rules! serial_println {
     }};
 }
 
-// Convenience wrappers to match vga.rs API
-pub fn print(s: &str) {
-    write_str(s);
-}
+pub fn print(s: &str) { write_str(s); }
+pub fn println(s: &str) { writeln(s); }
 
-pub fn println(s: &str) {
-    writeln(s);
-}
-
-pub fn print_hex(mut num: u64) {
+pub fn print_hex(num: u64) {
     write_str("0x");
-    
     for i in (0..16).rev() {
         let nibble = ((num >> (i * 4)) & 0xF) as u8;
-        let ch = if nibble < 10 {
-            b'0' + nibble
-        } else {
-            b'A' + (nibble - 10)
-        };
+        let ch = if nibble < 10 { b'0' + nibble } else { b'A' + (nibble - 10) };
         write_byte(ch);
     }
 }
 
 pub fn print_num(mut num: u64) {
-    if num == 0 {
-        write_byte(b'0');
-        return;
-    }
-    
+    if num == 0 { write_byte(b'0'); return; }
     let mut buf = [0u8; 20];
     let mut i = 0;
-    
     while num > 0 {
         buf[i] = b'0' + (num % 10) as u8;
         num /= 10;
         i += 1;
     }
-    
-    while i > 0 {
-        i -= 1;
-        write_byte(buf[i]);
-    }
+    while i > 0 { i -= 1; write_byte(buf[i]); }
 }
-
