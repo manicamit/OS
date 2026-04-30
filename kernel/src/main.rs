@@ -14,6 +14,11 @@ mod gdt;
 mod pic;
 mod pit;
 mod keyboard;
+mod pci;
+mod lpc;
+mod acpi;
+mod task;
+mod scheduler;
 
 use core::panic::PanicInfo;
 use pmm::PhysicalMemoryManager;
@@ -139,6 +144,9 @@ fn find_and_display_rsdp() {
                 vga::print("  Revision: "); vga::print_num(rsdp.revision as u64);
                 if rsdp.revision == 0 { vga::println(" (ACPI 1.0)"); }
                 else { vga::println(" (ACPI 2.0+)"); }
+                vga::print("  RSDT at: "); vga::print_hex(rsdp.rsdt_address as u64); vga::println("");
+                acpi::parse_from_rsdt(rsdp.rsdt_address);
+                vga::println("  ACPI tables parsed");
             }
         }
         None => vga::println("Not found!"),
@@ -546,12 +554,218 @@ extern "C" fn phase3_with_new_stack() -> ! {
     if ticks >= 40 { vga::println("  Timer: OK"); }
     else { vga::println("  Timer: UNEXPECTED"); }
 
+    // Phase 6: PCI Bus Enumeration
+    vga::println("");
+    vga::println("=== Phase 6: PCI Bus Scan ===");
+    vga::println("");
+
+    let pci_devices = pci::enumerate();
+    pci::display_devices(&pci_devices);
+
+    vga::println("");
+    vga::println("=== LPC/ISA Legacy Probe ===");
+    vga::println("");
+    lpc::scan_and_display();
+
+    vga::println("");
+    vga::println("=== ACPI System Info ===");
+    vga::println("");
+    acpi::display_info();
+
+    // Phase 7: Process Management
+    vga::println("");
+    vga::println("=== Phase 7: Process Management ===");
+    vga::println("");
+
+    scheduler::init();
+    scheduler::spawn(task_heartbeat);
+    scheduler::spawn(task_prime_compute);
+    scheduler::spawn(task_counter);
+    scheduler::spawn(task_memory_stress);
+    scheduler::spawn(task_fast_ticker);
+    scheduler::spawn(task_serial_logger);
+    scheduler::spawn(task_fibonacci);
+    scheduler::spawn(task_watchdog);
+
+    vga::println("  8 kernel threads spawned");
     vga::println("");
     vga::println("========================================");
-    vga::println("=== All 5 Phases Complete! ===");
+    vga::println("=== All 7 Phases Complete! ===");
     vga::println("========================================");
     vga::println("");
-    vga::println("Keyboard active - type something:");
 
     loop { unsafe { core::arch::asm!("hlt"); } }
+}
+
+// Task 1: Periodic heartbeat — prints a dot every 2 seconds
+fn task_heartbeat() -> ! {
+    let mut beat: u64 = 0;
+    loop {
+        beat += 1;
+        serial::print("[HEARTBEAT] beat #");
+        serial::print_num(beat);
+        serial::println("");
+        vga::print(".");
+        pit::sleep_ms(2000);
+    }
+}
+
+// Task 2: CPU-bound — find prime numbers (gets preempted mid-computation)
+fn task_prime_compute() -> ! {
+    let mut n: u64 = 2;
+    let mut found: u64 = 0;
+    loop {
+        if is_prime(n) {
+            found += 1;
+            if found % 50 == 0 {
+                serial::print("[PRIME] found ");
+                serial::print_num(found);
+                serial::print(" primes (latest: ");
+                serial::print_num(n);
+                serial::println(")");
+                vga::print("P");
+            }
+        }
+        n += 1;
+        if n > 100_000 { n = 2; found = 0; }
+    }
+}
+
+fn is_prime(n: u64) -> bool {
+    if n < 2 { return false; }
+    if n == 2 || n == 3 { return true; }
+    if n % 2 == 0 || n % 3 == 0 { return false; }
+    let mut i = 5u64;
+    while i * i <= n {
+        if n % i == 0 || n % (i + 2) == 0 { return false; }
+        i += 6;
+    }
+    true
+}
+
+// Task 3: Counter — tracks how many ticks it's been scheduled across
+fn task_counter() -> ! {
+    let mut count: u64 = 0;
+    let mut last_report = pit::get_ticks();
+    loop {
+        count += 1;
+        let now = pit::get_ticks();
+        if now - last_report >= 300 { // every ~3 seconds
+            serial::print("[COUNTER] iterations=");
+            serial::print_num(count);
+            serial::print(" at tick ");
+            serial::print_num(now);
+            serial::println("");
+            vga::print("C");
+            last_report = now;
+        }
+    }
+}
+
+// Task 4: Memory stress — allocates and frees Vec objects
+fn task_memory_stress() -> ! {
+    use alloc::vec::Vec;
+    let mut cycle: u64 = 0;
+    loop {
+        cycle += 1;
+        let mut v: Vec<u64> = Vec::new();
+        for i in 0..64 {
+            v.push(i * cycle);
+        }
+        let sum: u64 = v.iter().sum();
+        drop(v);
+
+        if cycle % 100 == 0 {
+            serial::print("[MALLOC] cycle ");
+            serial::print_num(cycle);
+            serial::print(" sum=");
+            serial::print_num(sum);
+            serial::println("");
+            vga::print("M");
+        }
+    }
+}
+
+// Task 5: Fast ticker — runs every 100ms to test rapid context switching
+fn task_fast_ticker() -> ! {
+    let mut tick_count: u64 = 0;
+    loop {
+        tick_count += 1;
+        if tick_count % 50 == 0 {
+            serial::print("[FAST] ");
+            serial::print_num(tick_count);
+            serial::print(" rapid cycles at tick ");
+            serial::print_num(pit::get_ticks());
+            serial::println("");
+            vga::print("F");
+        }
+        pit::sleep_ms(100);
+    }
+}
+
+// Task 6: Serial I/O bound — writes longer messages simulating log output
+fn task_serial_logger() -> ! {
+    let mut log_id: u64 = 0;
+    loop {
+        log_id += 1;
+        serial::print("[LOG #");
+        serial::print_num(log_id);
+        serial::print("] System uptime: ");
+        serial::print_num(pit::get_ticks() / 100);
+        serial::print("s | Tasks active | Heap OK | IRQs: ");
+        serial::print_num(pit::get_ticks());
+        serial::println("");
+        pit::sleep_ms(3000);
+    }
+}
+
+// Task 7: Fibonacci — CPU intensive with periodic output
+fn task_fibonacci() -> ! {
+    let mut round: u64 = 0;
+    loop {
+        round += 1;
+        let result = fib(30 + (round % 5));
+        serial::print("[FIB] fib(");
+        serial::print_num(30 + (round % 5));
+        serial::print(")=");
+        serial::print_num(result);
+        serial::println("");
+        vga::print("B");
+        pit::sleep_ms(500);
+    }
+}
+
+fn fib(n: u64) -> u64 {
+    if n <= 1 { return n; }
+    let mut a: u64 = 0;
+    let mut b: u64 = 1;
+    for _ in 2..=n {
+        let tmp = a + b;
+        a = b;
+        b = tmp;
+    }
+    b
+}
+
+// Task 8: Watchdog — monitors tick count and reports scheduling health
+fn task_watchdog() -> ! {
+    let mut last_tick = pit::get_ticks();
+    let mut checks: u64 = 0;
+    loop {
+        pit::sleep_ms(5000);
+        checks += 1;
+        let now = pit::get_ticks();
+        let elapsed = now - last_tick;
+        serial::print("[WATCHDOG #");
+        serial::print_num(checks);
+        serial::print("] ");
+        serial::print_num(elapsed);
+        serial::print(" ticks elapsed (~");
+        serial::print_num(elapsed / 100);
+        serial::print("s) | uptime ");
+        serial::print_num(now / 100);
+        serial::println("s");
+        vga::print("W");
+        last_tick = now;
+    }
 }

@@ -207,14 +207,32 @@ extern "C" fn generic_exception_handler() {
 extern "C" fn irq0_timer_handler() {
     unsafe {
         naked_asm!(
-            "push rax", "push rcx", "push rdx", "push rsi", "push rdi",
+            // Save all GPRs
+            "push rax", "push rcx", "push rdx", "push rbx",
+            "push rbp", "push rsi", "push rdi",
             "push r8", "push r9", "push r10", "push r11",
+            "push r12", "push r13", "push r14", "push r15",
+
+            // Tick counter
             "call {tick}",
+
+            // EOI (before context switch so new task can receive interrupts)
             "mov al, 0x20", "out 0x20, al",
-            "pop r11", "pop r10", "pop r9", "pop r8", "pop rdi",
-            "pop rsi", "pop rdx", "pop rcx", "pop rax",
+
+            // Pass current RSP to scheduler, get back (possibly different) RSP
+            "mov rdi, rsp",
+            "call {sched}",
+            "mov rsp, rax",
+
+            // Restore all GPRs (from potentially different task's stack)
+            "pop r15", "pop r14", "pop r13", "pop r12",
+            "pop r11", "pop r10", "pop r9", "pop r8",
+            "pop rdi", "pop rsi", "pop rbp",
+            "pop rbx", "pop rdx", "pop rcx", "pop rax",
+
             "iretq",
             tick = sym crate::pit::tick,
+            sched = sym crate::scheduler::schedule_from_isr,
         )
     }
 }
