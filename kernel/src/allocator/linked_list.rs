@@ -15,31 +15,65 @@ impl ListNode {
 }
 
 pub struct LinkedListAllocator {
-    head: UnsafeCell<Option<&'static mut ListNode>>,
+    head: UnsafeCell<ListNode>,
 }
 
 impl LinkedListAllocator {
     pub const fn new() -> Self {
-        Self { head: UnsafeCell::new(None) }
+        Self { head: UnsafeCell::new(ListNode::new(0)) }
     }
 
     pub unsafe fn init(&mut self, heap_start: usize, heap_size: usize) {
-        self.add_free_region(heap_start, heap_size);
+        let aligned = align_up(heap_start, mem::align_of::<ListNode>());
+        let size = heap_size - (aligned - heap_start);
+        let node_ptr = aligned as *mut ListNode;
+        ptr::write(node_ptr, ListNode::new(size));
+        (*self.head.get()).next = Some(&mut *node_ptr);
     }
 
-    unsafe fn add_free_region(&self, addr: usize, size: usize) {
-        assert_eq!(align_up(addr, mem::align_of::<ListNode>()), addr);
-        assert!(size >= mem::size_of::<ListNode>());
-        let mut node = ListNode::new(size);
-        node.next = (*self.head.get()).take();
-        let node_ptr = addr as *mut ListNode;
-        node_ptr.write(node);
-        *self.head.get() = Some(&mut *node_ptr)
+    unsafe fn insert_free_region(&self, addr: usize, size: usize) {
+        let aligned = align_up(addr, mem::align_of::<ListNode>());
+        if size < mem::size_of::<ListNode>() { return; }
+
+        let mut prev = &mut *self.head.get() as *mut ListNode;
+
+        // Find insertion point: prev -> [NEW] -> next, sorted by address
+        while let Some(ref mut next_node) = (*prev).next {
+            if next_node.start_addr() >= addr { break; }
+            prev = *next_node as *mut ListNode;
+        }
+
+        let next_opt = (*prev).next.take();
+        let new_addr = aligned;
+        let mut new_size = size;
+
+        // Try merge with next block
+        let mut new_next = next_opt;
+        if let Some(next_node) = new_next.as_mut() {
+            if new_addr + new_size == next_node.start_addr() {
+                let mut absorbed = new_next.take().unwrap();
+                new_size += absorbed.size;
+                new_next = absorbed.next.take();
+            }
+        }
+
+        // Try merge with prev block (if prev is a real region, not the dummy head)
+        let prev_end = (*prev).start_addr() + (*prev).size;
+        if (*prev).size > 0 && prev_end == new_addr {
+            (*prev).size += new_size;
+            (*prev).next = new_next;
+        } else {
+            let node_ptr = new_addr as *mut ListNode;
+            ptr::write(node_ptr, ListNode {
+                size: new_size,
+                next: new_next,
+            });
+            (*prev).next = Some(&mut *node_ptr);
+        }
     }
 
     unsafe fn find_region(&self, size: usize, align: usize) -> Option<(&'static mut ListNode, usize)> {
-        let head = &mut *self.head.get();
-        let mut current = &mut *head;
+        let mut current = &mut (*self.head.get()).next;
         while let Some(ref mut region) = current {
             if let Ok(alloc_start) = Self::alloc_from_region(region, size, align) {
                 let next = region.next.take();
@@ -71,20 +105,33 @@ impl LinkedListAllocator {
 
 unsafe impl GlobalAlloc for LinkedListAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        let flags: u64;
+        core::arch::asm!("pushfq; pop {}", out(reg) flags);
+        core::arch::asm!("cli", options(nomem, nostack));
+
         let (size, align) = LinkedListAllocator::size_align(layout);
-        if let Some((region, alloc_start)) = self.find_region(size, align) {
+        let result = if let Some((region, alloc_start)) = self.find_region(size, align) {
             let alloc_end = alloc_start.checked_add(size).expect("overflow");
             let excess_size = region.end_addr() - alloc_end;
-            if excess_size > 0 { self.add_free_region(alloc_end, excess_size); }
+            if excess_size > 0 { self.insert_free_region(alloc_end, excess_size); }
             alloc_start as *mut u8
         } else {
             ptr::null_mut()
-        }
+        };
+
+        if flags & 0x200 != 0 { core::arch::asm!("sti", options(nomem, nostack)); }
+        result
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        let flags: u64;
+        core::arch::asm!("pushfq; pop {}", out(reg) flags);
+        core::arch::asm!("cli", options(nomem, nostack));
+
         let (size, _) = LinkedListAllocator::size_align(layout);
-        self.add_free_region(ptr as usize, size)
+        self.insert_free_region(ptr as usize, size);
+
+        if flags & 0x200 != 0 { core::arch::asm!("sti", options(nomem, nostack)); }
     }
 }
 

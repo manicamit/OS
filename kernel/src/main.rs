@@ -597,20 +597,20 @@ extern "C" fn phase3_with_new_stack() -> ! {
     loop { unsafe { core::arch::asm!("hlt"); } }
 }
 
-// Task 1: Periodic heartbeat — prints a dot every 2 seconds
 fn task_heartbeat() -> ! {
     let mut beat: u64 = 0;
     loop {
         beat += 1;
-        serial::print("[HEARTBEAT] beat #");
-        serial::print_num(beat);
-        serial::println("");
+        let ie = serial::locked_begin();
+        serial::write_str_unlocked("[HEARTBEAT] beat #");
+        serial::write_num_unlocked(beat);
+        serial::write_str_unlocked("\n");
+        serial::locked_end(ie);
         vga::print(".");
         pit::sleep_ms(2000);
     }
 }
 
-// Task 2: CPU-bound — find prime numbers (gets preempted mid-computation)
 fn task_prime_compute() -> ! {
     let mut n: u64 = 2;
     let mut found: u64 = 0;
@@ -618,11 +618,13 @@ fn task_prime_compute() -> ! {
         if is_prime(n) {
             found += 1;
             if found % 50 == 0 {
-                serial::print("[PRIME] found ");
-                serial::print_num(found);
-                serial::print(" primes (latest: ");
-                serial::print_num(n);
-                serial::println(")");
+                let ie = serial::locked_begin();
+                serial::write_str_unlocked("[PRIME] found ");
+                serial::write_num_unlocked(found);
+                serial::write_str_unlocked(" primes (latest: ");
+                serial::write_num_unlocked(n);
+                serial::write_str_unlocked(")\n");
+                serial::locked_end(ie);
                 vga::print("P");
             }
         }
@@ -643,93 +645,98 @@ fn is_prime(n: u64) -> bool {
     true
 }
 
-// Task 3: Counter — tracks how many ticks it's been scheduled across
 fn task_counter() -> ! {
     let mut count: u64 = 0;
     let mut last_report = pit::get_ticks();
     loop {
         count += 1;
         let now = pit::get_ticks();
-        if now - last_report >= 300 { // every ~3 seconds
-            serial::print("[COUNTER] iterations=");
-            serial::print_num(count);
-            serial::print(" at tick ");
-            serial::print_num(now);
-            serial::println("");
+        if now - last_report >= 300 {
+            let ie = serial::locked_begin();
+            serial::write_str_unlocked("[COUNTER] iterations=");
+            serial::write_num_unlocked(count);
+            serial::write_str_unlocked(" at tick ");
+            serial::write_num_unlocked(now);
+            serial::write_str_unlocked("\n");
+            serial::locked_end(ie);
             vga::print("C");
             last_report = now;
         }
     }
 }
 
-// Task 4: Memory stress — allocates and frees Vec objects
 fn task_memory_stress() -> ! {
     use alloc::vec::Vec;
     let mut cycle: u64 = 0;
     loop {
         cycle += 1;
-        let mut v: Vec<u64> = Vec::new();
-        for i in 0..64 {
-            v.push(i * cycle);
-        }
+        let mut v: Vec<u64> = Vec::with_capacity(64);
+        for i in 0..64 { v.push(i * cycle); }
         let sum: u64 = v.iter().sum();
         drop(v);
 
-        if cycle % 100 == 0 {
-            serial::print("[MALLOC] cycle ");
-            serial::print_num(cycle);
-            serial::print(" sum=");
-            serial::print_num(sum);
-            serial::println("");
+        if cycle % 500 == 0 {
+            let ie = serial::locked_begin();
+            serial::write_str_unlocked("[MALLOC] cycle ");
+            serial::write_num_unlocked(cycle);
+            serial::write_str_unlocked(" sum=");
+            serial::write_num_unlocked(sum);
+            serial::write_str_unlocked("\n");
+            serial::locked_end(ie);
             vga::print("M");
         }
     }
 }
 
-// Task 5: Fast ticker — runs every 100ms to test rapid context switching
 fn task_fast_ticker() -> ! {
     let mut tick_count: u64 = 0;
     loop {
         tick_count += 1;
-        if tick_count % 50 == 0 {
-            serial::print("[FAST] ");
-            serial::print_num(tick_count);
-            serial::print(" rapid cycles at tick ");
-            serial::print_num(pit::get_ticks());
-            serial::println("");
+        if tick_count % 10 == 0 {
+            let ie = serial::locked_begin();
+            serial::write_str_unlocked("[FAST] ");
+            serial::write_num_unlocked(tick_count);
+            serial::write_str_unlocked(" rapid cycles at tick ");
+            serial::write_num_unlocked(pit::get_ticks());
+            serial::write_str_unlocked("\n");
+            serial::locked_end(ie);
             vga::print("F");
         }
         pit::sleep_ms(100);
     }
 }
 
-// Task 6: Serial I/O bound — writes longer messages simulating log output
 fn task_serial_logger() -> ! {
     let mut log_id: u64 = 0;
     loop {
         log_id += 1;
-        serial::print("[LOG #");
-        serial::print_num(log_id);
-        serial::print("] System uptime: ");
-        serial::print_num(pit::get_ticks() / 100);
-        serial::print("s | Tasks active | Heap OK | IRQs: ");
-        serial::print_num(pit::get_ticks());
-        serial::println("");
+        let ticks = pit::get_ticks();
+        let ie = serial::locked_begin();
+        serial::write_str_unlocked("[LOG #");
+        serial::write_num_unlocked(log_id);
+        serial::write_str_unlocked("] System uptime: ");
+        serial::write_num_unlocked(ticks / 100);
+        serial::write_str_unlocked("s | Tasks active | Heap OK | IRQs: ");
+        serial::write_num_unlocked(ticks);
+        serial::write_str_unlocked("\n");
+        serial::locked_end(ie);
         pit::sleep_ms(3000);
     }
 }
 
-// Task 7: Fibonacci — CPU intensive with periodic output
 fn task_fibonacci() -> ! {
     let mut round: u64 = 0;
     loop {
         round += 1;
-        let result = fib(30 + (round % 5));
-        serial::print("[FIB] fib(");
-        serial::print_num(30 + (round % 5));
-        serial::print(")=");
-        serial::print_num(result);
-        serial::println("");
+        let n = 30 + (round % 5);
+        let result = fib(n);
+        let ie = serial::locked_begin();
+        serial::write_str_unlocked("[FIB] fib(");
+        serial::write_num_unlocked(n);
+        serial::write_str_unlocked(")=");
+        serial::write_num_unlocked(result);
+        serial::write_str_unlocked("\n");
+        serial::locked_end(ie);
         vga::print("B");
         pit::sleep_ms(500);
     }
@@ -747,7 +754,6 @@ fn fib(n: u64) -> u64 {
     b
 }
 
-// Task 8: Watchdog — monitors tick count and reports scheduling health
 fn task_watchdog() -> ! {
     let mut last_tick = pit::get_ticks();
     let mut checks: u64 = 0;
@@ -756,15 +762,17 @@ fn task_watchdog() -> ! {
         checks += 1;
         let now = pit::get_ticks();
         let elapsed = now - last_tick;
-        serial::print("[WATCHDOG #");
-        serial::print_num(checks);
-        serial::print("] ");
-        serial::print_num(elapsed);
-        serial::print(" ticks elapsed (~");
-        serial::print_num(elapsed / 100);
-        serial::print("s) | uptime ");
-        serial::print_num(now / 100);
-        serial::println("s");
+        let ie = serial::locked_begin();
+        serial::write_str_unlocked("[WATCHDOG #");
+        serial::write_num_unlocked(checks);
+        serial::write_str_unlocked("] ");
+        serial::write_num_unlocked(elapsed);
+        serial::write_str_unlocked(" ticks elapsed (~");
+        serial::write_num_unlocked(elapsed / 100);
+        serial::write_str_unlocked("s) | uptime ");
+        serial::write_num_unlocked(now / 100);
+        serial::write_str_unlocked("s\n");
+        serial::locked_end(ie);
         vga::print("W");
         last_tick = now;
     }
